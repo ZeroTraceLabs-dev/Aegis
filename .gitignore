@@ -1,1 +1,2 @@
 .env
+rm 'supabase/migrations/1775516292-fix_wallet_monitor_cron_url.sql'
