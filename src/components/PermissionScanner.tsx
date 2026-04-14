@@ -70,6 +70,8 @@ export function PermissionScanner({ wallet, metadata }: PermissionScannerProps) 
     }, 0);
 
   async function handleRevoke(approval: DelegateApproval) {
+    console.log('[Revoke] handleRevoke called', approval);
+    if (!publicKey) return;
     if (!publicKey) return;
     const key = `${approval.mint}-${approval.delegate}`;
     setRevoking(key);
