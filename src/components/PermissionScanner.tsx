@@ -77,12 +77,7 @@ export function PermissionScanner({ wallet, metadata }: PermissionScannerProps) 
       const { PublicKey, Transaction } = await import('@solana/web3.js');
       const { createRevokeInstruction } = await import('@solana/spl-token');
 
-      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(publicKey, {
-        mint: new PublicKey(approval.mint),
-      });
-      if (tokenAccounts.value.length === 0) throw new Error('Token account not found');
-
-      const tokenAccountPk = tokenAccounts.value[0].pubkey;
+     const tokenAccountPk = new PublicKey(approval.tokenAccount);
       const ix = createRevokeInstruction(tokenAccountPk, publicKey);
       const tx = new Transaction().add(ix);
       const sig = await sendTransaction(tx, connection);

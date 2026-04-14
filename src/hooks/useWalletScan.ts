@@ -51,6 +51,7 @@ export interface DelegateApproval {
   amount: number;
   decimals: number;
   isNft: boolean;
+  tokenAccount: string;
 }
 
 export interface SignatureInfo {
@@ -167,7 +168,7 @@ export function useWalletData(): WalletData {
           if (info.delegate && info.delegatedAmount) {
             const da = parseFloat(info.delegatedAmount.amount) / Math.pow(10, decimals);
             if (da > 0) {
-              delegates.push({ mint, mintSymbol: res.symbol, delegate: info.delegate, amount: da, decimals, isNft });
+              delegates.push({ mint, mintSymbol: res.symbol, delegate: info.delegate, amount: da, decimals, isNft,tokenAccount: acc.pubkey.toString() });
             }
           }
         }
