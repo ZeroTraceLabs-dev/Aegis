@@ -464,7 +464,7 @@ export function useTokenMetadata(
       try {
         const web3 = await import('@solana/web3.js');
         PK = web3.PublicKey;
-        metaplexId = new PK('metaqbxxUoLD1pHGr7p9A8kNKr9S6hEBDhRBnGGZR3');
+        metaplexId = new PK('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
       } catch (e) {
         console.warn('[Meta] Metaplex init failed:', e);
         return;
