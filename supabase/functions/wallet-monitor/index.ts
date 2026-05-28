@@ -115,6 +115,16 @@ function classifyTransaction(
     const walletIndex = accountKeys.indexOf(walletAddress);
     if (walletIndex === -1) return null;
 
+    // ── Signer detection ──
+    // In Solana's tx layout, the first `numRequiredSignatures` entries of
+    // accountKeys are signers. If our wallet's index is past that boundary,
+    // the wallet did NOT sign this transaction — i.e. someone else made it
+    // happen. Lookup-table accounts (v0 transactions) are always non-signers,
+    // so this check is correct for both legacy and v0 transactions.
+    const header = message.header as Record<string, unknown> | undefined;
+    const numRequiredSignatures = (header?.numRequiredSignatures as number) || 0;
+    const walletWasSigner = walletIndex < numRequiredSignatures;
+
     const preBalances = (meta.preBalances as number[]) || [];
     const postBalances = (meta.postBalances as number[]) || [];
     const preSol = (preBalances[walletIndex] || 0) / LAMPORTS_PER_SOL;
@@ -171,8 +181,12 @@ function classifyTransaction(
       };
     }
 
-    // ── NFT transfer ──
-    if ((programs.has('Metaplex') || logText.includes('metaq')) && logText.includes('Transfer')) {
+    // ── NFT transfer (outbound — wallet signed) ──
+    // Only fires when the wallet is a signer, i.e. an outgoing NFT transfer
+    // the user authorized. Inbound NFTs (wallet not signer) are handled by
+    // the unsolicited-inflow branch below — the right framing for those is
+    // "an item arrived you didn't sign for," not "you transferred an NFT."
+    if (walletWasSigner && (programs.has('Metaplex') || logText.includes('metaq')) && logText.includes('Transfer')) {
       if (!config.alert_on_nft_transfers) return null;
       return {
         category: 'spamAirdrops',
@@ -254,6 +268,63 @@ function classifyTransaction(
             signature,
           };
         }
+      }
+    }
+
+    // ── Unsolicited inflow detection ──
+    // Fires when a token or NFT arrives in the wallet from a transaction the
+    // wallet did NOT sign. Honest scope: we trigger only on SPL/NFT inflows
+    // (not SOL), because SOL inflows have heavy non-malicious sources
+    // (marketplace sales, payments, transfers from a friend) where the
+    // user knew about the receipt without signing the inbound tx. Token/NFT
+    // arrivals to a wallet that didn't sign are the classic airdrop-drainer
+    // shape.
+    //
+    // Routed via category 'spamAirdrops' so it dispatches through the existing
+    // notify_spam_airdrops preference column — no new plumbing in
+    // send-notification or notification_preferences. Gated by
+    // alert_on_nft_transfers since that's the existing flag for the same
+    // class of event.
+    if (!walletWasSigner && config.alert_on_nft_transfers) {
+      type InflowItem = { mint: string; amount: number; isNft: boolean };
+      const inflows: InflowItem[] = [];
+      for (const post of postTokenBalances) {
+        if ((post.owner as string) !== walletAddress) continue;
+        const mint = post.mint as string;
+        const postUi = post.uiTokenAmount as Record<string, unknown> | undefined;
+        const postAmount = parseFloat((postUi?.uiAmountString as string) || '0');
+        const decimals = (postUi?.decimals as number) ?? 0;
+        const pre = preTokenBalances.find((p: Record<string, unknown>) =>
+          (p.owner as string) === walletAddress && (p.mint as string) === mint
+        );
+        const preAmount = pre
+          ? parseFloat(((pre.uiTokenAmount as Record<string, unknown>)?.uiAmountString as string) || '0')
+          : 0;
+        const change = postAmount - preAmount;
+        if (change > 0) {
+          inflows.push({ mint, amount: change, isNft: decimals === 0 && change >= 1 });
+        }
+      }
+
+      if (inflows.length > 0) {
+        const anyNft = inflows.some((i) => i.isNft);
+        const allNft = inflows.every((i) => i.isNft);
+        const itemPhrase = inflows.length === 1
+          ? (inflows[0].isNft ? 'An NFT' : `${inflows[0].amount} of a token`)
+          : (allNft ? `${inflows.length} NFTs` : (anyNft ? `${inflows.length} items` : `${inflows.length} tokens`));
+        const mintList = inflows.slice(0, 3).map((i) => i.mint.slice(0, 8) + '...').join(', ');
+        return {
+          category: 'spamAirdrops',
+          severity: 'warning',
+          title: 'Unexpected Item Reached Your Wallet',
+          body: `${itemPhrase} arrived in wallet ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)} ` +
+                `from a transaction you did not sign. Were you expecting this? ` +
+                `If not, do NOT interact with it, claim it, scan any QR code attached to it, or "redeem" it — ` +
+                `the safest action is to leave it untouched. ` +
+                `Mint(s): ${mintList} | TX: ${signature.slice(0, 12)}...`,
+          programs: [...programs],
+          signature,
+        };
       }
     }
 
