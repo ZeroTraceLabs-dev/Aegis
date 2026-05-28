@@ -93,13 +93,9 @@ export async function streamCerberusChat({
 export interface WalletSnapshot {
   walletAddress: string;
   solBalance: number;
-  healthScore: number;
   tokenCount: number;
   nftCount: number;
-  spamNftCount: number;
   delegateApprovals: { mint: string; symbol: string; delegate: string; usdValue: number }[];
-  safeDelegateCount?: number;
-  riskyTokens: { mint: string; symbol: string; grade: string; score: number }[];
   failedTxCount: number;
   emptyAccounts: number;
   recentEvents: { category: string; severity: string; title: string }[];
@@ -259,11 +255,9 @@ export function createMessage(role: 'user' | 'assistant', content: string): Cerb
 // ── Suggested quick actions ───────────────────────────────────
 
 export const CERBERUS_QUICK_ACTIONS = [
-  { label: 'Scan my wallet', prompt: 'What are the biggest security risks on my wallet right now?' },
-  { label: 'Explain my delegates', prompt: 'Explain all my delegate approvals. Which are from staking, which should I worry about, and which should I revoke?' },
-  { label: 'Explain health score', prompt: 'Explain what drives my wallet health score up and down.' },
-  { label: 'Token authority risks', prompt: 'Which of my tokens have active mint or freeze authority? What does that mean?' },
+  { label: 'Scan my wallet', prompt: 'What do you see on my wallet right now? Anything worth my attention?' },
+  { label: 'Explain my delegates', prompt: 'Walk me through my active delegate approvals. Which are likely from staking and which should I verify?' },
   { label: 'Phishing guide', prompt: 'How do I spot a phishing site in the Solana ecosystem?' },
-  { label: 'Delegate safety', prompt: 'What are token delegates and when should I revoke them?' },
-  { label: 'Rug-pull signs', prompt: 'What are the red flags for a potential rug-pull token?' },
+  { label: 'Delegate safety', prompt: 'What is a token delegate and when should I revoke one?' },
+  { label: 'Rug-pull signs', prompt: 'What are the general red flags people look for when evaluating a Solana token?' },
 ];

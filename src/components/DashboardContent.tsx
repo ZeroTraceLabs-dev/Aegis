@@ -9,10 +9,11 @@ import { PriceProvider, usePrices } from '@/components/PriceContext';
 import { NftHoldings } from '@/components/NftHoldings';
 import { ActivityFeed } from '@/components/ActivityFeed';
 import { WalletMonitor } from '@/components/WalletMonitor';
-import { stopMonitoring } from '@/lib/walletMonitorService';
+import { stopMonitoring, getMonitorEvents, subscribeMonitor } from '@/lib/walletMonitorService';
 import { NuclearEvacuation } from '@/components/NuclearEvacuation';
-import { initEvacuationStore, clearEvacuationStore } from '@/lib/evacuationStore';
-import { initWhitelistForWallet, clearWhitelist } from '@/lib/whitelistStore';
+import { initEvacuationStore, clearEvacuationStore, getSafeWallet, subscribeEvacuation } from '@/lib/evacuationStore';
+import { initWhitelistForWallet, clearWhitelist, getWhitelistCount, subscribeWhitelist } from '@/lib/whitelistStore';
+import { setWalletSnapshot, type WalletSnapshot } from '@/lib/cerberusService';
 import { TrustedAddresses } from '@/components/TrustedAddresses';
 import { TokenIcon } from '@/components/TokenIcon';
 import {
@@ -48,8 +49,71 @@ export function DashboardContent({ activeTab = 'wallet' }: DashboardContentProps
       clearEvacuationStore();
       clearWhitelist();
       stopMonitoring();
+      setWalletSnapshot(null);
     }
   }, [publicKey]);
+
+  // ── Cerberus wallet snapshot wiring ─────────────────────────────
+  // Builds a live snapshot of the connected wallet and pushes it to
+  // cerberusService so the chat edge function has real on-chain context.
+  // Re-runs whenever the scanned wallet data changes; also subscribes to the
+  // live monitor, whitelist, and evacuation stores so recentEvents /
+  // whitelistedAddressCount / hasEvacuationAddress stay current.
+  useEffect(() => {
+    if (!publicKey) {
+      setWalletSnapshot(null);
+      return;
+    }
+
+    const addr = publicKey.toBase58();
+
+    const push = () => {
+      const fungibles = wallet.tokenAccounts.filter((t) => !t.isNft && t.uiAmount > 0);
+      const nftCount = wallet.tokenAccounts.filter((t) => t.isNft).length;
+      const recent = getMonitorEvents().slice(0, 10).map((e) => ({
+        category: e.category,
+        severity: e.severity,
+        title: e.title,
+      }));
+
+      const snapshot: WalletSnapshot = {
+        walletAddress: addr,
+        solBalance: wallet.solBalance,
+        tokenCount: fungibles.length,
+        nftCount,
+        delegateApprovals: wallet.delegateApprovals.map((d) => ({
+          mint: d.mint,
+          symbol: d.mintSymbol,
+          delegate: d.delegate,
+          usdValue: 0, // pricing not joined into snapshot; left at 0 until/unless we wire prices in
+        })),
+        failedTxCount: wallet.failedTxCount,
+        emptyAccounts: wallet.emptyAccounts,
+        recentEvents: recent,
+        hasEvacuationAddress: !!getSafeWallet(),
+        whitelistedAddressCount: getWhitelistCount(),
+      };
+      setWalletSnapshot(snapshot);
+    };
+
+    push();
+    const unsubMonitor = subscribeMonitor(push);
+    const unsubWhitelist = subscribeWhitelist(push);
+    const unsubEvacuation = subscribeEvacuation(push);
+
+    return () => {
+      unsubMonitor();
+      unsubWhitelist();
+      unsubEvacuation();
+    };
+  }, [
+    publicKey,
+    wallet.solBalance,
+    wallet.tokenAccounts,
+    wallet.delegateApprovals,
+    wallet.failedTxCount,
+    wallet.emptyAccounts,
+  ]);
 
   const mints = useMemo(() => wallet.tokenAccounts.map((t) => t.mint), [wallet.tokenAccounts]);
   const { metadata, dasNfts } = useTokenMetadata(mints, publicKey?.toBase58());
