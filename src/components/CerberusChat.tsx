@@ -204,14 +204,12 @@ export function CerberusChat() {
         setStreaming(false);
       },
     });
-  }, [messages, streaming, publicKey, user]);
+  }, [messages, streaming, publicKey]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     sendMessage(input);
   };
-
-  const isLoggedIn = !!user;
 
   return (
     <>
@@ -291,7 +289,7 @@ export function CerberusChat() {
                       <button
                         key={action.label}
                         onClick={() => sendMessage(action.prompt)}
-                        disabled={!isLoggedIn}
+                        disabled={!connected}
                         className="px-2.5 py-1.5 rounded-md bg-secondary/60 border border-border text-[9px] font-medium text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {action.label}
@@ -299,9 +297,9 @@ export function CerberusChat() {
                     ))}
                   </div>
 
-                  {!isLoggedIn && (
+                  {!connected && (
                     <p className="mt-4 text-[9px] text-muted-foreground">
-                      Sign in to chat with Cerberus
+                      Connect wallet to chat with Cerberus
                     </p>
                   )}
                 </div>
@@ -328,13 +326,13 @@ export function CerberusChat() {
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder={isLoggedIn ? 'Ask Cerberus anything...' : 'Sign in to chat'}
-                  disabled={!isLoggedIn || streaming}
+                  placeholder={connected ? 'Ask Cerberus anything...' : 'Connect wallet to chat'}
+                  disabled={!connected || streaming}
                   className="flex-1 bg-secondary/60 border border-border rounded-md px-3 py-2 text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/40 disabled:opacity-40 transition-colors"
                 />
                 <button
                   type="submit"
-                  disabled={!input.trim() || !isLoggedIn || streaming}
+                  disabled={!input.trim() || !connected || streaming}
                   className="p-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 >
                   {streaming ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
