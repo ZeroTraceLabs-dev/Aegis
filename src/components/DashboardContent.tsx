@@ -10,7 +10,6 @@ import { NftHoldings } from '@/components/NftHoldings';
 import { ActivityFeed } from '@/components/ActivityFeed';
 import { WalletMonitor } from '@/components/WalletMonitor';
 import { stopMonitoring } from '@/lib/walletMonitorService';
-import { WalletManager } from '@/components/WalletManager';
 import { NuclearEvacuation } from '@/components/NuclearEvacuation';
 import { initEvacuationStore, clearEvacuationStore } from '@/lib/evacuationStore';
 import { initWhitelistForWallet, clearWhitelist } from '@/lib/whitelistStore';
@@ -97,7 +96,6 @@ export function DashboardContent({ activeTab = 'wallet' }: DashboardContentProps
           <>
             <TokenList wallet={mergedWallet} metadata={metadata} />
             <NftHoldings wallet={mergedWallet} metadata={metadata} />
-            <WalletManager />
           </>
         )}
 
