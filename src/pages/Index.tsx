@@ -4,6 +4,7 @@ import { DashboardContent, TABS } from '@/components/DashboardContent';
 import type { DashboardTab } from '@/components/DashboardContent';
 import { NotificationManager } from '@/components/NotificationManager';
 import { CerberusChat } from '@/components/CerberusChat';
+import { SignInButton } from '@/components/SignInButton';
 import { ArrowRight } from 'lucide-react';
 
 const LOGO_URL = 'https://storage.googleapis.com/prod-plena-ai-coder-images/bNOycalK.jpg';
@@ -37,6 +38,7 @@ export default function Index() {
               Playbook <ArrowRight size={10} />
             </a>
             <WalletMultiButton />
+            <SignInButton />
           </div>
         </div>
 
@@ -55,9 +57,10 @@ export default function Index() {
               <NotificationInline />
             </div>
           </div>
-          {/* Row 2: Wallet button full-width on mobile */}
-          <div className="px-3 pb-2">
+          {/* Row 2: Wallet button full-width on mobile + sign-in CTA */}
+          <div className="px-3 pb-2 flex flex-col gap-2">
             <div className="mobile-wallet-btn"><WalletMultiButton /></div>
+            <SignInButton />
           </div>
         </div>
       </nav>

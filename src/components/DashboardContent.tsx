@@ -12,6 +12,7 @@ import { WalletMonitor } from '@/components/WalletMonitor';
 import { stopMonitoring } from '@/lib/walletMonitorService';
 import { WalletManager } from '@/components/WalletManager';
 import { NuclearEvacuation } from '@/components/NuclearEvacuation';
+import { AlertHistory } from '@/components/AlertHistory';
 import { initEvacuationStore, clearEvacuationStore } from '@/lib/evacuationStore';
 import { initWhitelistForWallet, clearWhitelist } from '@/lib/whitelistStore';
 import { TrustedAddresses } from '@/components/TrustedAddresses';
@@ -105,6 +106,7 @@ export function DashboardContent({ activeTab = 'wallet' }: DashboardContentProps
           <>
             <WalletMonitor />
             <TrustedAddresses />
+            <AlertHistory />
             <ActivityFeed wallet={wallet} />
           </>
         )}

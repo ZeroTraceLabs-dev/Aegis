@@ -4,6 +4,7 @@ import { Toaster } from '@/components/ui/toaster';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { RPC_ENDPOINT } from '@/lib/rpc';
+import { SessionProvider } from '@/hooks/useSession';
 import NotFound from './pages/NotFound';
 import Index from './pages/Index';
 
@@ -19,11 +20,13 @@ const App = () => {
     >
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>
-          <Routes>
-            <Route path="/" element={<Index />} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-          <Toaster />
+          <SessionProvider>
+            <Routes>
+              <Route path="/" element={<Index />} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+            <Toaster />
+          </SessionProvider>
         </WalletModalProvider>
       </WalletProvider>
     </ConnectionProvider>
