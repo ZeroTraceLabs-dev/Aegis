@@ -20,7 +20,6 @@ import {
   CERBERUS_QUICK_ACTIONS,
   type CerberusMessage,
 } from '@/lib/cerberusService';
-import { useAuth } from '@/hooks/useAuth';
 import { addToWhitelist, isWhitelisted } from '@/lib/whitelistStore';
 
 /* ── Cerberus branding icon ────────────────────────────────── */
@@ -141,7 +140,6 @@ function renderMarkdown(text: string): string {
 
 export function CerberusChat() {
   const { connected, publicKey } = useWallet();
-  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [messages, setMessages] = useState<CerberusMessage[]>([]);
@@ -177,7 +175,6 @@ export function CerberusChat() {
     // Build context
     const context: Record<string, unknown> = {};
     if (publicKey) context.walletAddress = publicKey.toBase58();
-    if (user?.email) context.userEmail = user.email;
 
     await streamCerberusChat({
       messages: [...messages, userMsg],

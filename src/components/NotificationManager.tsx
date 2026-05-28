@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { createPortal } from 'react-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   Bell,
@@ -13,12 +12,7 @@ import {
   Check,
   Mail,
   Send,
-  MessageCircle,
-  Loader2,
-  ExternalLink,
-  Save,
-  Radar,
-  Settings2,
+  Lock,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -29,24 +23,19 @@ import {
   getPermissionStatus,
   isNotificationSupported,
   sendBrowserNotification,
-  loadChannelPreferences,
-  getChannelPreferences,
-  saveChannelPreferences,
-  isChannelPrefsLoaded,
   dispatchNotification,
   type NotificationSettings,
-  type ChannelPreferences,
 } from '@/lib/notificationService';
 import { subscribeAlerts, type WalletEvent } from '@/lib/walletMonitorService';
-import {
-  syncTrackingWithNotifications,
-  getTrackingConfig,
-  updateTrackingThresholds,
-  CERBERUS_DEFAULTS,
-  type WalletTrackingConfig,
-} from '@/lib/walletTrackingService';
-import { supabase } from '@/lib/supabaseClient';
-import { useAuth } from '@/hooks/useAuth';
+
+/**
+ * Background monitoring + external alerts (Telegram / Discord / Email) all
+ * key on a Supabase auth user_id. With email/password auth removed, those
+ * features are inert until wallet-signature auth ships. Controls below are
+ * rendered disabled so the affordance is visible.
+ */
+const EXTERNAL_CHANNELS_AVAILABLE = false;
+const SIGNIN_LOCK_TITLE = 'Requires wallet sign-in (coming soon)';
 
 /* ── Toggle row ─────────────────────────────────────────────── */
 
@@ -56,17 +45,28 @@ interface ToggleRowProps {
   icon: React.ReactNode;
   enabled: boolean;
   onToggle: () => void;
+  disabled?: boolean;
+  lockTitle?: string;
 }
 
-function ToggleRow({ label, description, icon, enabled, onToggle }: ToggleRowProps) {
+function ToggleRow({ label, description, icon, enabled, onToggle, disabled, lockTitle }: ToggleRowProps) {
   return (
     <button
-      onClick={onToggle}
-      className="flex items-center gap-3 w-full p-2.5 rounded-md hover:bg-secondary/40 transition-colors text-left"
+      onClick={disabled ? undefined : onToggle}
+      disabled={disabled}
+      title={disabled ? lockTitle : undefined}
+      className={`flex items-center gap-3 w-full p-2.5 rounded-md text-left transition-colors ${
+        disabled
+          ? 'opacity-50 cursor-not-allowed'
+          : 'hover:bg-secondary/40'
+      }`}
     >
       <div className="text-muted-foreground shrink-0">{icon}</div>
       <div className="flex-1 min-w-0">
-        <span className="text-[11px] font-semibold text-foreground block">{label}</span>
+        <span className="text-[11px] font-semibold text-foreground block flex items-center gap-1.5">
+          {label}
+          {disabled && <Lock size={9} className="text-muted-foreground" />}
+        </span>
         <span className="text-[9px] text-muted-foreground">{description}</span>
       </div>
       <div className={`w-8 h-4.5 rounded-full p-0.5 transition-colors ${enabled ? 'bg-primary' : 'bg-secondary'}`}>
@@ -102,88 +102,26 @@ function DiscordIcon({ size = 14 }: { size?: number }) {
 /* ── Main component ─────────────────────────────────────────── */
 
 export function NotificationManager() {
-  const { connected, publicKey } = useWallet();
-  const { user } = useAuth();
-  const walletAddress = publicKey?.toBase58() || '';
+  const { connected } = useWallet();
   const [settings, setSettings] = useState<NotificationSettings>(getNotificationSettings());
-  const [channelPrefs, setChannelPrefs] = useState<ChannelPreferences>(getChannelPreferences());
   const [permission, setPermission] = useState(getPermissionStatus());
   const [expanded, setExpanded] = useState(false);
-  const [activeTab, setActiveTab] = useState<'types' | 'channels' | 'thresholds'>('channels');
+  const [activeTab, setActiveTab] = useState<'types' | 'channels'>('channels');
   const [testSent, setTestSent] = useState(false);
-  const [scanning, setScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [showConsent, setShowConsent] = useState(false);
-  const [consentPending, setConsentPending] = useState<(() => void) | null>(null);
-  const [trackingActive, setTrackingActive] = useState(false);
   const supported = isNotificationSupported();
-
-  // Threshold state
-  const [solThreshold, setSolThreshold] = useState(CERBERUS_DEFAULTS.thresholdSolOutflow.toString());
-  const [usdThreshold, setUsdThreshold] = useState(CERBERUS_DEFAULTS.thresholdTokenOutflowUsd.toString());
-  const [thresholdSaving, setThresholdSaving] = useState(false);
-  const [thresholdSaved, setThresholdSaved] = useState(false);
-
-  // Draft state for channel inputs
-  const [tgDraft, setTgDraft] = useState('');
-  const [dcUserIdDraft, setDcUserIdDraft] = useState('');
-  const [emailDraft, setEmailDraft] = useState('');
 
   // Subscribe to settings changes
   useEffect(() => {
     const unsub = subscribeNotificationSettings(() => {
       setSettings(getNotificationSettings());
-      setChannelPrefs(getChannelPreferences());
     });
     return unsub;
   }, []);
 
-  // Load channel prefs + tracking config from Supabase when user logs in
-  useEffect(() => {
-    if (user) {
-      loadChannelPreferences().then((prefs) => {
-        setChannelPrefs(prefs);
-        setTgDraft(prefs.telegramChatId);
-        setDcUserIdDraft(prefs.discordUserId);
-        setEmailDraft(prefs.alertEmail);
-      });
-      // Check if tracking is already active for this wallet
-      if (walletAddress) {
-        getTrackingConfig(walletAddress).then((cfg) => {
-          if (cfg) {
-            setTrackingActive(cfg.enabled);
-            setSolThreshold(cfg.thresholdSolOutflow.toString());
-            setUsdThreshold(cfg.thresholdTokenOutflowUsd.toString());
-          }
-        });
-      }
-    }
-  }, [user, walletAddress]);
-
-  // Auto-sync tracking whenever any external channel is enabled/disabled
-  useEffect(() => {
-    if (!user || !walletAddress) return;
-    const hasAnyChannel =
-      channelPrefs.emailEnabled ||
-      (channelPrefs.telegramEnabled && !!channelPrefs.telegramChatId) ||
-      (channelPrefs.discordEnabled && !!channelPrefs.discordUserId);
-    if (hasAnyChannel && !trackingActive) {
-      // Auto-register wallet for background monitoring
-      syncTrackingWithNotifications(walletAddress, true, {
-        thresholdSolOutflow: parseFloat(solThreshold) || 0.5,
-        thresholdTokenOutflowUsd: parseFloat(usdThreshold) || 50,
-      }).then((ok) => {
-        if (ok) setTrackingActive(true);
-      });
-    } else if (!hasAnyChannel && trackingActive) {
-      syncTrackingWithNotifications(walletAddress, false);
-      setTrackingActive(false);
-    }
-  }, [user, walletAddress, channelPrefs, trackingActive, solThreshold, usdThreshold]);
-
-  // Hook into live monitor alerts
+  // Hook into live monitor alerts -> browser notifications.
+  // dispatchNotification fires sendBrowserNotification first and only attempts
+  // external channels when a Supabase session exists, which it won't until
+  // wallet-sig auth ships. So browser pings still work; external silently no-ops.
   useEffect(() => {
     if (!connected) return;
     const unsub = subscribeAlerts((event: WalletEvent) => {
@@ -212,217 +150,23 @@ export function NotificationManager() {
     updateNotificationSettings({ [key]: !settings[key] });
   }, [settings]);
 
-  const handleChannelToggle = useCallback(async (key: keyof ChannelPreferences) => {
-    const newVal = !channelPrefs[key];
-    const updated = { [key]: newVal };
-
-    // If enabling an external channel for the first time, show consent
-    const isEnabling = newVal === true;
-    const isExternalChannel = key === 'emailEnabled' || key === 'telegramEnabled' || key === 'discordEnabled';
-
-    if (isEnabling && isExternalChannel && !trackingActive && walletAddress) {
-      setShowConsent(true);
-      setConsentPending(() => async () => {
-        setChannelPrefs((prev) => ({ ...prev, ...updated }));
-        await saveChannelPreferences(updated);
-        await syncTrackingWithNotifications(walletAddress, true, {
-          thresholdSolOutflow: parseFloat(solThreshold) || 0.5,
-          thresholdTokenOutflowUsd: parseFloat(usdThreshold) || 50,
-        });
-        setTrackingActive(true);
-        setShowConsent(false);
-        setConsentPending(null);
-      });
-      return;
-    }
-
-    setChannelPrefs((prev) => {
-      const next = { ...prev, ...updated };
-      // If all external channels are now off, immediately disable tracking
-      const hasAny =
-        next.emailEnabled ||
-        (next.telegramEnabled && !!next.telegramChatId) ||
-        (next.discordEnabled && !!next.discordUserId);
-      if (!hasAny && trackingActive && walletAddress) {
-        syncTrackingWithNotifications(walletAddress, false).then(() => {
-          setTrackingActive(false);
-        });
-      }
-      return next;
-    });
-    await saveChannelPreferences(updated);
-  }, [channelPrefs, trackingActive, walletAddress, solThreshold, usdThreshold]);
-
-  const handleConsentAccept = useCallback(() => {
-    if (consentPending) consentPending();
-  }, [consentPending]);
-
-  const handleConsentDecline = useCallback(() => {
-    setShowConsent(false);
-    setConsentPending(null);
-  }, []);
-
-  const handleSaveThresholds = useCallback(async () => {
-    if (!walletAddress) return;
-    setThresholdSaving(true);
-    await updateTrackingThresholds(walletAddress, {
-      thresholdSolOutflow: parseFloat(solThreshold) || 0.5,
-      thresholdTokenOutflowUsd: parseFloat(usdThreshold) || 50,
-    });
-    setThresholdSaving(false);
-    setThresholdSaved(true);
-    setTimeout(() => setThresholdSaved(false), 2500);
-  }, [walletAddress, solThreshold, usdThreshold]);
-
-  const handleSaveChannels = useCallback(async () => {
-    setSaving(true);
-    const updates: Partial<ChannelPreferences> = {
-      telegramChatId: tgDraft.trim(),
-      discordUserId: dcUserIdDraft.trim(),
-      alertEmail: emailDraft.trim(),
-    };
-    const ok = await saveChannelPreferences(updates);
-    if (ok) {
-      const merged = { ...channelPrefs, ...updates };
-      setChannelPrefs(merged);
-
-      // Auto-sync wallet tracking — same rules for all channels
-      if (walletAddress) {
-        const hasAnyChannel =
-          (merged.emailEnabled && !!(merged.alertEmail || user?.email)) ||
-          (merged.telegramEnabled && !!merged.telegramChatId) ||
-          (merged.discordEnabled && !!merged.discordUserId);
-
-        const thresholds = {
-          thresholdSolOutflow: parseFloat(solThreshold) || 0.5,
-          thresholdTokenOutflowUsd: parseFloat(usdThreshold) || 50,
-        };
-
-        if (hasAnyChannel && !trackingActive) {
-          // First time enabling — show consent, then sync + auto-test
-          setShowConsent(true);
-          // Store wallet address in a stable ref to avoid race
-          const capturedWallet = walletAddress;
-          setConsentPending(() => async () => {
-            await syncTrackingWithNotifications(capturedWallet, true, thresholds);
-            setTrackingActive(true);
-            setShowConsent(false);
-            setConsentPending(null);
-            // Auto-fire test notification to verify pipeline
-            fireVerificationTest();
-          });
-        } else if (hasAnyChannel && trackingActive) {
-          await syncTrackingWithNotifications(walletAddress, true, thresholds);
-        } else if (!hasAnyChannel && trackingActive) {
-          await syncTrackingWithNotifications(walletAddress, false);
-          setTrackingActive(false);
-        }
-      }
-
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-    }
-    setSaving(false);
-  }, [tgDraft, dcUserIdDraft, emailDraft, channelPrefs, walletAddress, trackingActive, solThreshold, usdThreshold, user]);
-
-  // Fires a silent verification test after first-time setup
-  const fireVerificationTest = useCallback(async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-      await fetch(`${SUPABASE_URL}/functions/v1/send-notification`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify({
-          type: 'test',
-          title: 'Cerberus Activated',
-          body: 'Background monitoring is now live. You will receive alerts here when suspicious activity is detected on your wallet.',
-          enrichWithCerberus: false,
-        }),
-      });
-    } catch { /* silent */ }
-  }, []);
-
-  const handleTestNotification = useCallback(async () => {
-    // 1) Browser notification
+  const handleTestNotification = useCallback(() => {
     sendBrowserNotification(
       'healthDrops',
       'Test Notification',
       'ZeroTraceLabs notifications are working correctly.',
       { tag: 'test' },
     );
-
-    // 2) Force-send to all enabled external channels (bypass alert-type filtering)
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.access_token) {
-        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-        await fetch(`${SUPABASE_URL}/functions/v1/send-notification`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json',
-            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-          },
-          body: JSON.stringify({
-            type: 'test',
-            title: 'Test Notification',
-            body: 'ZeroTraceLabs notifications are working correctly. If you see this on Telegram, Discord, or Email — your channels are live.',
-            enrichWithCerberus: false,
-          }),
-        });
-      }
-    } catch { /* silent */ }
-
     setTestSent(true);
     setTimeout(() => setTestSent(false), 3000);
   }, []);
 
-  const handleForceScan = useCallback(async () => {
-    if (!walletAddress || scanning) return;
-    setScanning(true);
-    setScanResult(null);
-    try {
-      const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/wallet-monitor`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify({ wallet_address: walletAddress }),
-      });
-      const data = await res.json();
-      if (data.results?.[0]) {
-        const r = data.results[0];
-        setScanResult(`${r.txnsProcessed} txns scanned, ${r.alertsFired} alerts fired`);
-      } else {
-        setScanResult(data.message || 'Scan complete');
-      }
-    } catch {
-      setScanResult('Scan failed');
-    }
-    setScanning(false);
-    setTimeout(() => setScanResult(null), 5000);
-  }, [walletAddress, scanning]);
-
-  if (!connected && !user) return null;
-
   const tabs = [
     { key: 'channels' as const, label: 'Channels' },
     { key: 'types' as const, label: 'Alert Types' },
-    ...(trackingActive ? [{ key: 'thresholds' as const, label: 'Thresholds' }] : []),
   ];
 
   return (
-    <>
     <motion.div
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
@@ -442,21 +186,6 @@ export function NotificationManager() {
           <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground">
             Notifications
           </h3>
-          {trackingActive && (
-            <span className="text-[8px] px-1.5 py-0.5 rounded bg-primary/15 text-primary font-bold">TRACKING</span>
-          )}
-          {/* Channel indicators */}
-          <div className="flex items-center gap-1">
-            {channelPrefs.emailEnabled && (
-              <span className="w-1.5 h-1.5 rounded-full bg-primary" title="Email" />
-            )}
-            {channelPrefs.telegramEnabled && channelPrefs.telegramChatId && (
-              <span className="w-1.5 h-1.5 rounded-full bg-[#29B6F6]" title="Telegram" />
-            )}
-            {channelPrefs.discordEnabled && (
-              <span className="w-1.5 h-1.5 rounded-full bg-[#5865F2]" title="Discord" />
-            )}
-          </div>
         </div>
         <ChevronDown size={12} className={`text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
       </button>
@@ -474,7 +203,7 @@ export function NotificationManager() {
               {/* Master toggle */}
               <ToggleRow
                 label="Enable All Notifications"
-                description="Master switch for all notification types and channels"
+                description="Master switch for browser notifications"
                 icon={<Bell size={14} />}
                 enabled={settings.enabled}
                 onToggle={() => handleBrowserToggle('enabled')}
@@ -542,27 +271,13 @@ export function NotificationManager() {
                         </span>
                         <ToggleRow
                           label="Email Alerts"
-                          description={emailDraft || user?.email ? `Notifications sent to ${emailDraft || user?.email}` : 'Enter an email to receive alerts'}
+                          description="Enter an email to receive alerts"
                           icon={<Mail size={14} />}
-                          enabled={channelPrefs.emailEnabled}
-                          onToggle={() => handleChannelToggle('emailEnabled')}
+                          enabled={false}
+                          onToggle={() => {}}
+                          disabled={!EXTERNAL_CHANNELS_AVAILABLE}
+                          lockTitle={SIGNIN_LOCK_TITLE}
                         />
-                        {channelPrefs.emailEnabled && (
-                          <div className="px-2.5 space-y-1.5">
-                            <input
-                              value={emailDraft}
-                              onChange={(e) => setEmailDraft(e.target.value)}
-                              placeholder={user?.email || 'your@email.com'}
-                              type="email"
-                              className="w-full bg-secondary/60 border border-border rounded px-3 py-2 text-[10px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/40 transition-colors"
-                            />
-                            <p className="text-[9px] text-muted-foreground leading-relaxed">
-                              {user?.email
-                                ? <>Defaults to your account email. Enter a different address to override.</>
-                                : <>Web3 wallets don't have an email on file. Enter one here to receive alert emails.</>}
-                            </p>
-                          </div>
-                        )}
                       </div>
 
                       {/* Telegram */}
@@ -574,23 +289,11 @@ export function NotificationManager() {
                           label="Telegram Alerts"
                           description="Receive alerts via Telegram bot"
                           icon={<TelegramIcon />}
-                          enabled={channelPrefs.telegramEnabled}
-                          onToggle={() => handleChannelToggle('telegramEnabled')}
+                          enabled={false}
+                          onToggle={() => {}}
+                          disabled={!EXTERNAL_CHANNELS_AVAILABLE}
+                          lockTitle={SIGNIN_LOCK_TITLE}
                         />
-                        {channelPrefs.telegramEnabled && (
-                          <div className="px-2.5 space-y-1.5">
-                            <input
-                              value={tgDraft}
-                              onChange={(e) => setTgDraft(e.target.value)}
-                              placeholder="Telegram Chat ID (e.g. 123456789)"
-                              className="w-full bg-secondary/60 border border-border rounded px-3 py-2 text-[10px] font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/40 transition-colors"
-                            />
-                            <p className="text-[9px] text-muted-foreground leading-relaxed">
-                              Message <a href="https://t.me/Cerberus_watchbot" target="_blank" rel="noopener noreferrer" className="text-primary font-semibold hover:underline">@Cerberus_watchbot</a> on Telegram to get your Chat ID.
-                              Send <span className="font-mono text-foreground">/start</span> then <span className="font-mono text-foreground">/chatid</span>.
-                            </p>
-                          </div>
-                        )}
                       </div>
 
                       {/* Discord */}
@@ -602,63 +305,12 @@ export function NotificationManager() {
                           label="Discord DM Alerts"
                           description="Receive private alerts via Cerberus bot DM"
                           icon={<DiscordIcon />}
-                          enabled={channelPrefs.discordEnabled}
-                          onToggle={() => handleChannelToggle('discordEnabled')}
+                          enabled={false}
+                          onToggle={() => {}}
+                          disabled={!EXTERNAL_CHANNELS_AVAILABLE}
+                          lockTitle={SIGNIN_LOCK_TITLE}
                         />
-                        {channelPrefs.discordEnabled && (
-                          <div className="px-2.5 space-y-2">
-                            <a
-                              href="https://discord.gg/9NaPPj7KMk"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                window.open('https://discord.gg/9NaPPj7KMk', '_blank', 'noopener,noreferrer');
-                              }}
-                              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-md bg-[#5865F2]/10 border border-[#5865F2]/25 text-[#5865F2] text-[10px] font-semibold hover:bg-[#5865F2]/20 transition-colors"
-                            >
-                              <DiscordIcon size={12} />
-                              Step 1: Join the Aegis Discord
-                              <ExternalLink size={8} />
-                            </a>
-                            <input
-                              value={dcUserIdDraft}
-                              onChange={(e) => setDcUserIdDraft(e.target.value)}
-                              placeholder="Step 2: Your Discord User ID (e.g. 123456789012345678)"
-                              className="w-full bg-secondary/60 border border-border rounded px-3 py-2 text-[10px] font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-[#5865F2]/40 transition-colors"
-                            />
-                            <p className="text-[9px] text-muted-foreground leading-relaxed">
-                              Alerts are sent as <span className="text-foreground font-semibold">private DMs</span> from the Cerberus bot -- only you can see them.
-                              To get your User ID: enable Developer Mode in Discord settings, then right-click your name and select "Copy User ID".
-                            </p>
-                          </div>
-                        )}
                       </div>
-
-                      {/* Save button — visible when any channel is enabled */}
-                      {(channelPrefs.emailEnabled || channelPrefs.telegramEnabled || channelPrefs.discordEnabled) && (
-                        <>
-                          <button
-                            onClick={handleSaveChannels}
-                            disabled={saving}
-                            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-primary text-primary-foreground text-[10px] font-semibold hover:bg-primary/90 disabled:opacity-40 transition-colors"
-                          >
-                            {saving ? (
-                              <Loader2 size={12} className="animate-spin" />
-                            ) : saved ? (
-                              <><Check size={12} /> Saved &amp; Synced</>
-                            ) : (
-                              <><Save size={12} /> Save Channel Settings</>
-                            )}
-                          </button>
-                          {!trackingActive && walletAddress && (
-                            <p className="text-[8px] text-muted-foreground text-center">
-                              Saving will activate background monitoring for your connected wallet
-                            </p>
-                          )}
-                        </>
-                      )}
                     </div>
                   )}
 
@@ -670,118 +322,40 @@ export function NotificationManager() {
                         description="Alert when your security score drops significantly"
                         icon={<Shield size={14} />}
                         enabled={settings.healthDrops}
-                        onToggle={() => {
-                          handleBrowserToggle('healthDrops');
-                          saveChannelPreferences({ notifyHealthDrops: !channelPrefs.notifyHealthDrops });
-                        }}
+                        onToggle={() => handleBrowserToggle('healthDrops')}
                       />
                       <ToggleRow
                         label="Spam Airdrops"
                         description="Alert when suspected spam tokens are detected"
                         icon={<Package size={14} />}
                         enabled={settings.spamAirdrops}
-                        onToggle={() => {
-                          handleBrowserToggle('spamAirdrops');
-                          saveChannelPreferences({ notifySpamAirdrops: !channelPrefs.notifySpamAirdrops });
-                        }}
+                        onToggle={() => handleBrowserToggle('spamAirdrops')}
                       />
                       <ToggleRow
                         label="Delegate Changes"
                         description="Alert when token approvals are granted or revoked"
                         icon={<KeyRound size={14} />}
                         enabled={settings.delegateChanges}
-                        onToggle={() => {
-                          handleBrowserToggle('delegateChanges');
-                          saveChannelPreferences({ notifyDelegateChanges: !channelPrefs.notifyDelegateChanges });
-                        }}
+                        onToggle={() => handleBrowserToggle('delegateChanges')}
                       />
                       <ToggleRow
                         label="Authority Changes"
                         description="Alert when token authorities are modified"
                         icon={<AlertTriangle size={14} />}
                         enabled={settings.authorityChanges}
-                        onToggle={() => {
-                          handleBrowserToggle('authorityChanges');
-                          saveChannelPreferences({ notifyAuthorityChanges: !channelPrefs.notifyAuthorityChanges });
-                        }}
+                        onToggle={() => handleBrowserToggle('authorityChanges')}
                       />
                       <ToggleRow
                         label="Suspicious Activity"
                         description="Alert for large outflows and danger events"
                         icon={<ArrowUpRight size={14} />}
                         enabled={settings.largeOutflows}
-                        onToggle={() => {
-                          handleBrowserToggle('largeOutflows');
-                          saveChannelPreferences({ notifySuspiciousActivity: !channelPrefs.notifySuspiciousActivity });
-                        }}
+                        onToggle={() => handleBrowserToggle('largeOutflows')}
                       />
                     </div>
                   )}
 
-                  {/* ── THRESHOLDS TAB ── */}
-                  {activeTab === 'thresholds' && trackingActive && (
-                    <div className="space-y-3 max-h-[360px] overflow-y-auto pr-0.5">
-                      <div className="flex items-center gap-2 p-2.5 bg-primary/5 border border-primary/20 rounded-lg">
-                        <Radar size={12} className="text-primary flex-shrink-0" />
-                        <p className="text-[10px] text-muted-foreground">
-                          Cerberus monitors your wallet every 3 minutes while you're offline. Customize when alerts fire.
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3 px-1">
-                        <div>
-                          <label className="text-[9px] text-muted-foreground font-medium block mb-1">SOL Outflow Alert</label>
-                          <div className="flex items-center gap-1">
-                            <input
-                              type="number"
-                              step="0.1"
-                              min="0"
-                              value={solThreshold}
-                              onChange={(e) => setSolThreshold(e.target.value)}
-                              className="w-full bg-secondary/60 border border-border rounded px-2 py-1.5 text-[10px] font-mono text-foreground focus:outline-none focus:border-primary/40"
-                            />
-                            <span className="text-[9px] text-muted-foreground">SOL</span>
-                          </div>
-                          <p className="text-[8px] text-muted-foreground mt-0.5">Alert when single outflow exceeds this</p>
-                        </div>
-                        <div>
-                          <label className="text-[9px] text-muted-foreground font-medium block mb-1">Token Outflow Alert</label>
-                          <div className="flex items-center gap-1">
-                            <input
-                              type="number"
-                              step="10"
-                              min="0"
-                              value={usdThreshold}
-                              onChange={(e) => setUsdThreshold(e.target.value)}
-                              className="w-full bg-secondary/60 border border-border rounded px-2 py-1.5 text-[10px] font-mono text-foreground focus:outline-none focus:border-primary/40"
-                            />
-                            <span className="text-[9px] text-muted-foreground">USD</span>
-                          </div>
-                          <p className="text-[8px] text-muted-foreground mt-0.5">Alert when token outflow value exceeds this</p>
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={handleSaveThresholds}
-                        disabled={thresholdSaving}
-                        className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-primary/10 border border-primary/20 rounded-lg text-primary text-[10px] font-semibold hover:bg-primary/20 transition-colors"
-                      >
-                        {thresholdSaving ? <Loader2 size={10} className="animate-spin" /> : thresholdSaved ? <><Check size={10} /> Saved</> : <><Settings2 size={10} /> Save Thresholds</>}
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          setSolThreshold(CERBERUS_DEFAULTS.thresholdSolOutflow.toString());
-                          setUsdThreshold(CERBERUS_DEFAULTS.thresholdTokenOutflowUsd.toString());
-                        }}
-                        className="w-full text-[9px] text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        Reset to Cerberus Defaults (0.5 SOL / $50 USD)
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Test & Scan footer */}
+                  {/* Test footer */}
                   <div className="pt-2 border-t border-border space-y-2">
                     <div className="flex items-center justify-between">
                       <button
@@ -789,37 +363,15 @@ export function NotificationManager() {
                         className="flex items-center gap-2 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                       >
                         {testSent ? (
-                          <><Check size={10} className="text-safe" /><span className="text-safe">Sent to all channels</span></>
+                          <><Check size={10} className="text-safe" /><span className="text-safe">Test sent</span></>
                         ) : (
-                          <><Send size={10} /> Send test notification</>
+                          <><Send size={10} /> Send browser test notification</>
                         )}
                       </button>
                       <span className="text-[9px] text-muted-foreground">
-                        {[
-                          permission === 'granted' && 'Browser',
-                          channelPrefs.emailEnabled && 'Email',
-                          channelPrefs.telegramEnabled && channelPrefs.telegramChatId && 'Telegram',
-                          channelPrefs.discordEnabled && channelPrefs.discordUserId && 'Discord',
-                        ].filter(Boolean).join(' + ') || 'No channels active'}
+                        {permission === 'granted' ? 'Browser' : 'No channels active'}
                       </span>
                     </div>
-                    {trackingActive && walletAddress && (
-                      <div className="flex items-center justify-between">
-                        <button
-                          onClick={handleForceScan}
-                          disabled={scanning}
-                          className="flex items-center gap-2 text-[10px] text-muted-foreground hover:text-primary transition-colors disabled:opacity-50"
-                        >
-                          {scanning ? (
-                            <><Loader2 size={10} className="animate-spin" /> Scanning wallet...</>
-                          ) : scanResult ? (
-                            <><Radar size={10} className="text-primary" /><span className="text-primary">{scanResult}</span></>
-                          ) : (
-                            <><Radar size={10} /> Force background scan now</>
-                          )}
-                        </button>
-                      </div>
-                    )}
                   </div>
                 </>
               )}
@@ -828,71 +380,5 @@ export function NotificationManager() {
         )}
       </AnimatePresence>
     </motion.div>
-
-    {/* ── Consent Modal (portaled to body to avoid transform/overflow issues) ── */}
-    {showConsent && createPortal(
-      <AnimatePresence>
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-          style={{ margin: 0, top: 0, left: 0, width: '100vw', height: '100vh' }}
-          onClick={handleConsentDecline}
-        >
-          <motion.div
-            initial={{ scale: 0.9, opacity: 0, y: 20 }}
-            animate={{ scale: 1, opacity: 1, y: 0 }}
-            exit={{ scale: 0.9, opacity: 0, y: 20 }}
-            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-            onClick={(e) => e.stopPropagation()}
-            className="bg-card border border-border rounded-xl max-w-md w-full p-6 space-y-4 mx-auto"
-          >
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-primary/15">
-                <Radar size={18} className="text-primary" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-foreground">Enable Background Monitoring</h3>
-                <p className="text-[10px] text-muted-foreground">Cerberus needs to track your wallet</p>
-              </div>
-            </div>
-
-            <div className="p-3 bg-secondary/30 rounded-lg space-y-2">
-              <p className="text-[11px] text-foreground leading-relaxed">
-                By enabling notifications, your wallet address will be monitored by Cerberus in the background, even when you're not logged in.
-              </p>
-              <p className="text-[10px] text-muted-foreground leading-relaxed">
-                Every 3 minutes, Cerberus checks your recent transactions on-chain for suspicious activity
-                (outflows, delegate approvals, authority changes). When something is detected, you'll receive
-                an AI-enriched "Was this you?" alert on your configured channels.
-              </p>
-              <p className="text-[10px] text-muted-foreground leading-relaxed">
-                ZeroTraceLabs stores your wallet address and notification preferences. We never access your private keys
-                or sign transactions. You can disable monitoring at any time by turning off all notification channels.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                onClick={handleConsentAccept}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-primary/15 border border-primary/30 rounded-lg text-primary text-[11px] font-bold hover:bg-primary/25 transition-colors"
-              >
-                <Shield size={12} />
-                I Agree, Enable Monitoring
-              </button>
-              <button
-                onClick={handleConsentDecline}
-                className="px-4 py-2.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </motion.div>
-        </motion.div>
-      </AnimatePresence>,
-      document.body
-    )}
-    </>
   );
 }

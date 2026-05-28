@@ -4,7 +4,6 @@ import { Toaster } from '@/components/ui/toaster';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { RPC_ENDPOINT } from '@/lib/rpc';
-import { AuthProvider } from '@/hooks/useAuth';
 import NotFound from './pages/NotFound';
 import Index from './pages/Index';
 
@@ -14,22 +13,20 @@ const App = () => {
   const wallets = useMemo(() => [], []);
 
   return (
-    <AuthProvider>
-      <ConnectionProvider
-        endpoint={RPC_ENDPOINT}
-        config={{ disableRetryOnRateLimit: true }}
-      >
-        <WalletProvider wallets={wallets} autoConnect>
-          <WalletModalProvider>
-            <Routes>
-              <Route path="/" element={<Index />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-            <Toaster />
-          </WalletModalProvider>
-        </WalletProvider>
-      </ConnectionProvider>
-    </AuthProvider>
+    <ConnectionProvider
+      endpoint={RPC_ENDPOINT}
+      config={{ disableRetryOnRateLimit: true }}
+    >
+      <WalletProvider wallets={wallets} autoConnect>
+        <WalletModalProvider>
+          <Routes>
+            <Route path="/" element={<Index />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+          <Toaster />
+        </WalletModalProvider>
+      </WalletProvider>
+    </ConnectionProvider>
   );
 };
 
