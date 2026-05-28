@@ -25,7 +25,11 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=8f69d10b-adcf-45e3-a26f-055938e2648a";
+const HELIUS_API_KEY = Deno.env.get("HELIUS_API_KEY");
+if (!HELIUS_API_KEY) {
+  throw new Error("Missing HELIUS_API_KEY environment variable");
+}
+const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
 const LAMPORTS_PER_SOL = 1_000_000_000;
 
 interface MonitoredWallet {
