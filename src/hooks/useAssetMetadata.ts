@@ -13,8 +13,6 @@ import { useEffect, useState, useRef, useMemo } from 'react';
 import { RPC_ENDPOINT } from '@/lib/rpc';
 import { injectDasPrices, extractNftCollections } from '@/lib/priceService';
 import { getTokenListMap } from '@/lib/tokenService';
-import { scoreSpam } from '@/lib/spamDetector';
-import type { SpamSignals, SpamResult } from '@/lib/spamDetector';
 import type { TokenData } from '@/types/token';
 
 export interface TokenMeta {
@@ -32,14 +30,6 @@ export interface DasNft {
   image: string;
   compressed: boolean;
   collection?: string;
-  spam?: SpamResult;
-}
-
-/** Global spam score cache — keyed by mint address */
-const _spamCache = new Map<string, SpamResult>();
-
-export function getSpamScore(mint: string): SpamResult | undefined {
-  return _spamCache.get(mint);
 }
 
 const _cache = new Map<string, TokenMeta>();
@@ -185,30 +175,6 @@ export function useTokenMetadata(
                   (g: any) => g.group_key === 'collection',
                 );
 
-                // Extract spam signals from DAS
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const creators: any[] = item.creators || item.content?.metadata?.creators || [];
-                const hasVerified = creators.some((c: { verified?: boolean }) => c.verified === true);
-                const spamSignals: SpamSignals = {
-                  dasSpam: item.spam === true || item.content?.metadata?.attributes?.some?.(
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    (a: any) => a.trait_type === 'spam' && a.value === 'true',
-                  ),
-                  burnt: item.burnt === true,
-                  noVerifiedCreator: creators.length === 0 || !hasVerified,
-                  royaltyModel: item.royalty?.royalty_model || '',
-                  royaltyBps: item.royalty?.basis_points ?? undefined,
-                  hasCollection: !!collGroup?.group_value,
-                  compressed: !!item.compression?.compressed,
-                };
-                const spamResult = scoreSpam(
-                  m.name || '',
-                  m.symbol || '',
-                  image || '',
-                  spamSignals,
-                );
-                _spamCache.set(id, spamResult);
-
                 _dasNftCache.push({
                   mint: id,
                   name: m.name || `NFT ${id.slice(0, 4)}...${id.slice(-4)}`,
@@ -216,7 +182,6 @@ export function useTokenMetadata(
                   image: image,
                   compressed: !!item.compression?.compressed,
                   collection: collGroup?.group_value || undefined,
-                  spam: spamResult,
                 });
               }
 

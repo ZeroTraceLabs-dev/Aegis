@@ -16,7 +16,7 @@ const BRAND_URL = 'https://storage.googleapis.com/prod-plena-ai-coder-images/f1n
 export default function Index() {
   const { connected } = useWallet();
   const { user, loading, signOut } = useAuth();
-  const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
+  const [activeTab, setActiveTab] = useState<DashboardTab>('wallet');
 
   const isLoggedIn = !!user;
 

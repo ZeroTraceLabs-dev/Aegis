@@ -1,55 +1,34 @@
-import React, { useMemo, useEffect, useState } from 'react';
+import React, { useMemo, useEffect } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletData } from '@/hooks/useWalletScan';
 import { useTokenMetadata } from '@/hooks/useAssetMetadata';
 import type { TokenAccount } from '@/hooks/useWalletScan';
-import { PriceProvider } from '@/components/PriceContext';
-import { HealthScore } from '@/components/HealthScore';
-import { StatsBar } from '@/components/StatsBar';
-import { PermissionScanner } from '@/components/PermissionScanner';
-import { RiskEvaluation } from '@/components/RiskEvaluation';
-import { PortfolioBreakdown } from '@/components/PortfolioBreakdown';
+import type { WalletData } from '@/hooks/useWalletScan';
+import type { TokenMeta } from '@/hooks/useAssetMetadata';
+import { PriceProvider, usePrices } from '@/components/PriceContext';
 import { NftHoldings } from '@/components/NftHoldings';
-import { WalletActions } from '@/components/WalletActions';
 import { ActivityFeed } from '@/components/ActivityFeed';
-import { initRiskStoreForWallet, clearRiskStore } from '@/lib/riskStore';
-import { initSpamStoreForWallet, clearSpamStore } from '@/lib/manualSpamStore';
-import { initHealthHistoryForWallet, clearHealthHistory } from '@/lib/healthHistoryStore';
-import { HealthHistory } from '@/components/HealthHistory';
-import { TokenRiskScoring } from '@/components/TokenRiskScoring';
-import { clearTokenRiskCache } from '@/lib/tokenRiskService';
-import { initChecklistForWallet, clearChecklist } from '@/lib/checklistStore';
-import { BeforeYouSign } from '@/components/BeforeYouSign';
-import { TransactionSimulator } from '@/components/TransactionSimulator';
 import { WalletMonitor } from '@/components/WalletMonitor';
 import { stopMonitoring } from '@/lib/walletMonitorService';
 import { WalletManager } from '@/components/WalletManager';
-import { CerberusInsights } from '@/components/CerberusInsights';
 import { NuclearEvacuation } from '@/components/NuclearEvacuation';
-import { TransactionVerifyAlert } from '@/components/TransactionVerifyAlert';
 import { AlertHistory } from '@/components/AlertHistory';
-import { useHealthScore } from '@/hooks/useHealthScore';
 import { initEvacuationStore, clearEvacuationStore } from '@/lib/evacuationStore';
 import { initWhitelistForWallet, clearWhitelist } from '@/lib/whitelistStore';
-import { ScamChecker } from '@/components/ScamChecker';
 import { TrustedAddresses } from '@/components/TrustedAddresses';
-import { DeFiPositions } from '@/components/DeFiPositions';
+import { TokenIcon } from '@/components/TokenIcon';
 import {
-  LayoutDashboard,
-  ShieldCheck,
   Wallet,
   Radio,
   AlertTriangle,
 } from 'lucide-react';
 
-export type DashboardTab = 'overview' | 'security' | 'assets' | 'monitoring' | 'emergency';
+export type DashboardTab = 'wallet' | 'watch' | 'emergency';
 
 const TABS: { id: DashboardTab; label: string; icon: React.ReactNode; danger?: boolean }[] = [
-  { id: 'overview', label: 'Overview', icon: <LayoutDashboard size={13} /> },
-  { id: 'security', label: 'Security', icon: <ShieldCheck size={13} /> },
-  { id: 'assets', label: 'Assets', icon: <Wallet size={13} /> },
-  { id: 'monitoring', label: 'Monitoring', icon: <Radio size={13} /> },
-  { id: 'emergency', label: 'Emergency', icon: <AlertTriangle size={13} />, danger: true },
+  { id: 'wallet', label: 'Wallet', icon: <Wallet size={13} /> },
+  { id: 'watch', label: 'Watch', icon: <Radio size={13} /> },
+  { id: 'emergency', label: 'Evacuation', icon: <AlertTriangle size={13} />, danger: true },
 ];
 
 export { TABS };
@@ -58,38 +37,25 @@ interface DashboardContentProps {
   activeTab?: DashboardTab;
 }
 
-export function DashboardContent({ activeTab = 'overview' }: DashboardContentProps) {
+export function DashboardContent({ activeTab = 'wallet' }: DashboardContentProps) {
   const { publicKey } = useWallet();
   const wallet = useWalletData();
 
-  // Hydrate persisted risk acknowledgments & manual spam flags for this wallet
   useEffect(() => {
     if (publicKey) {
       const addr = publicKey.toBase58();
-      initRiskStoreForWallet(addr);
-      initSpamStoreForWallet(addr);
-      initHealthHistoryForWallet(addr);
-      initChecklistForWallet(addr);
       initEvacuationStore(addr);
       initWhitelistForWallet(addr);
     } else {
-      clearRiskStore();
-      clearSpamStore();
-      clearHealthHistory();
-      clearTokenRiskCache();
-      clearChecklist();
       clearEvacuationStore();
       clearWhitelist();
       stopMonitoring();
     }
   }, [publicKey]);
 
-  const healthScore = useHealthScore(wallet);
-
   const mints = useMemo(() => wallet.tokenAccounts.map((t) => t.mint), [wallet.tokenAccounts]);
   const { metadata, dasNfts } = useTokenMetadata(mints, publicKey?.toBase58());
 
-  // Merge DAS-discovered NFTs (compressed, pNFTs, etc.) into the token list
   const mergedTokenAccounts = useMemo(() => {
     const splMints = new Set(wallet.tokenAccounts.map((t) => t.mint));
     const extraNfts: TokenAccount[] = [];
@@ -127,45 +93,20 @@ export function DashboardContent({ activeTab = 'overview' }: DashboardContentPro
 
   return (
     <PriceProvider allMints={allMints} nftMints={nftMints}>
-      {/* Global alert -- always visible */}
-      <TransactionVerifyAlert />
-
       <div className="space-y-4 mt-4">
-        {activeTab === 'overview' && (
+        {activeTab === 'wallet' && (
           <>
-            <HealthScore wallet={mergedWallet} />
-            <CerberusInsights wallet={mergedWallet} metadata={metadata} healthScore={healthScore} />
-            <HealthHistory />
-            <StatsBar wallet={mergedWallet} />
-            <PortfolioBreakdown wallet={mergedWallet} metadata={metadata} />
-          </>
-        )}
-
-        {activeTab === 'security' && (
-          <>
-            <RiskEvaluation wallet={mergedWallet} metadata={metadata} />
-            <PermissionScanner wallet={wallet} metadata={metadata} />
-            <WalletActions wallet={wallet} />
-            <TransactionSimulator />
-            <BeforeYouSign />
-            <TokenRiskScoring wallet={mergedWallet} metadata={metadata} />
-          </>
-        )}
-
-        {activeTab === 'assets' && (
-          <>
-            <PortfolioBreakdown wallet={mergedWallet} metadata={metadata} />
+            <TokenList wallet={mergedWallet} metadata={metadata} />
             <NftHoldings wallet={mergedWallet} metadata={metadata} />
-            <DeFiPositions />
+            <WalletManager />
           </>
         )}
 
-        {activeTab === 'monitoring' && (
+        {activeTab === 'watch' && (
           <>
             <WalletMonitor />
             <TrustedAddresses />
             <AlertHistory />
-            <ScamChecker wallet={mergedWallet} />
             <ActivityFeed wallet={wallet} />
           </>
         )}
@@ -173,10 +114,90 @@ export function DashboardContent({ activeTab = 'overview' }: DashboardContentPro
         {activeTab === 'emergency' && (
           <>
             <NuclearEvacuation wallet={mergedWallet} />
-            <WalletManager />
           </>
         )}
       </div>
     </PriceProvider>
+  );
+}
+
+interface TokenListProps {
+  wallet: WalletData;
+  metadata: Map<string, TokenMeta>;
+}
+
+function TokenList({ wallet, metadata }: TokenListProps) {
+  const { getUsdValue, formatUsd, getSolPrice } = usePrices();
+
+  const fungibles = useMemo(
+    () => wallet.tokenAccounts.filter((t) => !t.isNft && t.uiAmount > 0),
+    [wallet.tokenAccounts],
+  );
+
+  const enriched = useMemo(() => {
+    const rows = fungibles.map((t) => {
+      const meta = metadata.get(t.mint);
+      const symbol = (meta?.symbol && !meta.symbol.includes('..')) ? meta.symbol : (t.symbol || `${t.mint.slice(0, 4)}..${t.mint.slice(-4)}`);
+      const name = meta?.name || t.name || symbol;
+      const image = meta?.image || '';
+      const usd = getUsdValue(t.mint, t.uiAmount) ?? 0;
+      return { mint: t.mint, symbol, name, image, uiAmount: t.uiAmount, usd };
+    });
+    rows.sort((a, b) => b.usd - a.usd);
+    return rows;
+  }, [fungibles, metadata, getUsdValue]);
+
+  const solUsd = wallet.solBalance * getSolPrice();
+  const totalUsd = enriched.reduce((s, r) => s + r.usd, 0) + solUsd;
+
+  if (wallet.solBalance === 0 && enriched.length === 0) return null;
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-5 card-glow">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">Tokens</h3>
+        {totalUsd > 0 && (
+          <span className="text-xs font-bold text-accent">{formatUsd(totalUsd)}</span>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        {wallet.solBalance > 0 && (
+          <div className="flex items-center gap-3 p-2.5 rounded-md hover:bg-secondary/50 transition-colors">
+            <TokenIcon src="" symbol="SOL" size={32} />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-foreground">SOL</p>
+              <p className="text-[10px] text-muted-foreground">Solana</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs font-semibold text-foreground">{wallet.solBalance.toFixed(4)}</p>
+              {solUsd > 0 && <p className="text-[10px] text-accent">{formatUsd(solUsd)}</p>}
+            </div>
+          </div>
+        )}
+
+        {enriched.map((row) => (
+          <a
+            key={row.mint}
+            href={`https://solscan.io/token/${row.mint}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 p-2.5 rounded-md hover:bg-secondary/50 transition-colors"
+          >
+            <TokenIcon src={row.image} symbol={row.symbol} size={32} />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-foreground truncate">{row.symbol}</p>
+              <p className="text-[10px] text-muted-foreground truncate">{row.name}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs font-semibold text-foreground">
+                {row.uiAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+              </p>
+              {row.usd > 0 && <p className="text-[10px] text-accent">{formatUsd(row.usd)}</p>}
+            </div>
+          </a>
+        ))}
+      </div>
+    </div>
   );
 }
