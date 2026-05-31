@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import {
   Grid3x3, List, ExternalLink, ImageOff, Search,
   ChevronDown, ChevronRight, Layers, FolderOpen,
@@ -7,10 +7,18 @@ import type { WalletData } from '@/hooks/useWalletScan';
 import type { TokenMeta } from '@/hooks/useAssetMetadata';
 import { usePrices } from './PriceContext';
 import { getCollectionMap, getCollectionName } from '@/lib/priceService';
+import {
+  subscribeSpamFilter,
+  isNftCollectionSpam,
+  markNftCollectionSpam,
+  unmarkNftCollectionSpam,
+} from '@/lib/spamFilterStore';
+import { SpamMenu } from './SpamMenu';
 
 interface NftHoldingsProps {
   wallet: WalletData;
   metadata: Map<string, TokenMeta>;
+  showSpam: boolean;
 }
 
 function abbr(addr: string): string {
@@ -42,7 +50,7 @@ interface CollectionGroup {
   coverImage: string;
 }
 
-export function NftHoldings({ wallet, metadata }: NftHoldingsProps) {
+export function NftHoldings({ wallet, metadata, showSpam }: NftHoldingsProps) {
   const { getNftFloor, formatUsd, prices } = usePrices();
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [groupMode, setGroupMode] = useState<'collection' | 'all'>('collection');
@@ -52,6 +60,13 @@ export function NftHoldings({ wallet, metadata }: NftHoldingsProps) {
   // semantics, which had a brittle init effect that missed late-loading
   // collections (DAS metadata arriving after the first paint).
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+
+  // Re-render on spam list mutations.
+  const [, forceUpdate] = useState(0);
+  useEffect(() => {
+    const unsub = subscribeSpamFilter(() => forceUpdate((n) => n + 1));
+    return unsub;
+  }, []);
 
   const nfts = wallet.tokenAccounts.filter((t) => t.isNft);
   const collectionMap = useMemo(() => getCollectionMap(), [prices]);
@@ -71,17 +86,26 @@ export function NftHoldings({ wallet, metadata }: NftHoldingsProps) {
     });
   }, [nfts, metadata, getNftFloor, prices, collectionMap]);
 
+  // A spam mark lives at the collection level. For uncategorized NFTs
+  // (collectionId === '') we use the synthetic '__uncategorized__' id, which
+  // is markable like any real collection (lets the user hide the whole bucket).
+  const spamKey = (collectionId: string) => collectionId || '__uncategorized__';
+  const nftIsSpam = (nft: EnrichedNft) => isNftCollectionSpam(spamKey(nft.collectionId));
+
   const filtered = useMemo(() => {
-    if (!search) return enrichedNfts;
-    const q = search.toLowerCase();
-    return enrichedNfts.filter(
-      (n) =>
-        n.name.toLowerCase().includes(q) ||
-        n.symbol.toLowerCase().includes(q) ||
-        n.mint.toLowerCase().includes(q) ||
-        n.collectionName.toLowerCase().includes(q),
-    );
-  }, [enrichedNfts, search]);
+    const base = search
+      ? enrichedNfts.filter(
+          (n) =>
+            n.name.toLowerCase().includes(search.toLowerCase()) ||
+            n.symbol.toLowerCase().includes(search.toLowerCase()) ||
+            n.mint.toLowerCase().includes(search.toLowerCase()) ||
+            n.collectionName.toLowerCase().includes(search.toLowerCase()),
+        )
+      : enrichedNfts;
+    if (showSpam) return base;
+    return base.filter((n) => !nftIsSpam(n));
+    // forceUpdate counter via component re-render; not threaded as a dep.
+  }, [enrichedNfts, search, showSpam]);
 
   const collections = useMemo((): CollectionGroup[] => {
     const groups = new Map<string, EnrichedNft[]>();
@@ -110,10 +134,23 @@ export function NftHoldings({ wallet, metadata }: NftHoldingsProps) {
     return result;
   }, [filtered]);
 
-  const totalNftValue = useMemo(
-    () => enrichedNfts.reduce((sum, nft) => sum + (nft.floor?.floor || 0), 0),
+  // Totals always exclude spam, regardless of the "Show spam" toggle.
+  const nonSpamNfts = useMemo(
+    () => enrichedNfts.filter((n) => !nftIsSpam(n)),
     [enrichedNfts],
   );
+  const visibleCount = nonSpamNfts.length;
+  const totalNftValue = useMemo(
+    () => nonSpamNfts.reduce((sum, nft) => sum + (nft.floor?.floor || 0), 0),
+    [nonSpamNfts],
+  );
+  const visibleCollectionCount = useMemo(() => {
+    const ids = new Set<string>();
+    for (const n of nonSpamNfts) {
+      if (n.collectionId) ids.add(n.collectionId);
+    }
+    return ids.size;
+  }, [nonSpamNfts]);
 
   const toggleCollapse = (id: string) => {
     setExpanded((prev) => {
@@ -136,10 +173,10 @@ export function NftHoldings({ wallet, metadata }: NftHoldingsProps) {
           <h3 className="section-header text-sm font-semibold text-foreground uppercase tracking-wider">
             NFT Holdings
           </h3>
-          <span className="text-xs text-muted-foreground">({enrichedNfts.length})</span>
-          {hasCollections && (
+          <span className="text-xs text-muted-foreground">({visibleCount})</span>
+          {visibleCollectionCount > 0 && (
             <span className="text-[10px] text-muted-foreground/60 ml-1">
-              {collections.filter((c) => c.id !== '__uncategorized__').length} collections
+              {visibleCollectionCount} collection{visibleCollectionCount !== 1 ? 's' : ''}
             </span>
           )}
         </div>
@@ -203,38 +240,56 @@ export function NftHoldings({ wallet, metadata }: NftHoldingsProps) {
         <div className="space-y-3">
           {collections.map((group) => {
             const isCollapsed = !expanded.has(group.id);
+            const spam = isNftCollectionSpam(group.id);
             return (
-              <div key={group.id} className="border border-border rounded-lg overflow-hidden bg-secondary/20">
-                <button
-                  className="w-full flex items-center gap-3 p-3 hover:bg-secondary/40 transition-colors text-left"
-                  onClick={() => toggleCollapse(group.id)}
-                >
-                  <div className="w-9 h-9 rounded-md overflow-hidden bg-background shrink-0 flex items-center justify-center">
-                    {group.coverImage ? (
-                      <img
-                        src={group.coverImage}
-                        alt={group.name}
-                        className="w-full h-full object-cover"
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                      />
-                    ) : (
-                      <Layers size={16} className="text-muted-foreground" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-semibold text-foreground truncate">{group.name}</p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {group.nfts.length} item{group.nfts.length !== 1 ? 's' : ''}
-                      {group.totalFloor > 0 && (
-                        <span className="text-muted-foreground ml-2 font-medium">{formatUsd(group.totalFloor)}</span>
+              <div
+                key={group.id}
+                className={`border border-border rounded-md overflow-hidden bg-secondary/20 ${spam ? 'opacity-50' : ''}`}
+              >
+                <div className="flex items-center gap-2 pr-2 hover:bg-secondary/40 transition-colors">
+                  <button
+                    className="flex items-center gap-3 p-3 text-left flex-1 min-w-0"
+                    onClick={() => toggleCollapse(group.id)}
+                  >
+                    <div className="w-9 h-9 rounded-md overflow-hidden bg-background shrink-0 flex items-center justify-center">
+                      {group.coverImage ? (
+                        <img
+                          src={group.coverImage}
+                          alt={group.name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                        />
+                      ) : (
+                        <Layers size={16} className="text-muted-foreground" />
                       )}
-                    </p>
-                  </div>
-                  {isCollapsed
-                    ? <ChevronRight size={16} className="text-muted-foreground shrink-0" />
-                    : <ChevronDown size={16} className="text-muted-foreground shrink-0" />
-                  }
-                </button>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-foreground truncate flex items-center gap-1.5">
+                        {group.name}
+                        {spam && (
+                          <span className="text-[8px] uppercase tracking-wider text-muted-foreground border border-border rounded px-1 py-px">
+                            spam
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {group.nfts.length} item{group.nfts.length !== 1 ? 's' : ''}
+                        {group.totalFloor > 0 && (
+                          <span className="text-muted-foreground ml-2 font-medium">{formatUsd(group.totalFloor)}</span>
+                        )}
+                      </p>
+                    </div>
+                    {isCollapsed
+                      ? <ChevronRight size={16} className="text-muted-foreground shrink-0" />
+                      : <ChevronDown size={16} className="text-muted-foreground shrink-0" />
+                    }
+                  </button>
+                  <SpamMenu
+                    isSpam={spam}
+                    onMark={() => markNftCollectionSpam(group.id)}
+                    onUnmark={() => unmarkNftCollectionSpam(group.id)}
+                  />
+                </div>
                 {!isCollapsed && (
                   <div className="px-3 pb-3">
                     {viewMode === 'grid'

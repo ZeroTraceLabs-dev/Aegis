@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect } from 'react';
+import React, { useMemo, useEffect, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletData } from '@/hooks/useWalletScan';
 import { useTokenMetadata } from '@/hooks/useAssetMetadata';
@@ -13,13 +13,24 @@ import { stopMonitoring, getMonitorEvents, subscribeMonitor } from '@/lib/wallet
 import { NuclearEvacuation } from '@/components/NuclearEvacuation';
 import { initEvacuationStore, clearEvacuationStore, getSafeWallet, subscribeEvacuation } from '@/lib/evacuationStore';
 import { initWhitelistForWallet, clearWhitelist, getWhitelistCount, subscribeWhitelist } from '@/lib/whitelistStore';
+import {
+  initSpamFilterForWallet,
+  clearSpamFilter,
+  subscribeSpamFilter,
+  isTokenSpam,
+  markTokenSpam,
+  unmarkTokenSpam,
+} from '@/lib/spamFilterStore';
 import { setWalletSnapshot, type WalletSnapshot } from '@/lib/cerberusService';
 import { TrustedAddresses } from '@/components/TrustedAddresses';
 import { TokenIcon } from '@/components/TokenIcon';
+import { SpamMenu } from '@/components/SpamMenu';
 import {
   Wallet,
   Radio,
   AlertTriangle,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 // Canonical Solana mark for the native SOL row. SPL token list serves the
@@ -45,15 +56,18 @@ interface DashboardContentProps {
 export function DashboardContent({ activeTab = 'wallet' }: DashboardContentProps) {
   const { publicKey } = useWallet();
   const wallet = useWalletData();
+  const [showSpam, setShowSpam] = useState(false);
 
   useEffect(() => {
     if (publicKey) {
       const addr = publicKey.toBase58();
       initEvacuationStore(addr);
       initWhitelistForWallet(addr);
+      initSpamFilterForWallet(addr);
     } else {
       clearEvacuationStore();
       clearWhitelist();
+      clearSpamFilter();
       stopMonitoring();
       setWalletSnapshot(null);
     }
@@ -164,8 +178,9 @@ export function DashboardContent({ activeTab = 'wallet' }: DashboardContentProps
       <div className="space-y-4 mt-4">
         {activeTab === 'wallet' && (
           <>
-            <TokenList wallet={mergedWallet} metadata={metadata} />
-            <NftHoldings wallet={mergedWallet} metadata={metadata} />
+            <ShowSpamToggle showSpam={showSpam} onChange={setShowSpam} />
+            <TokenList wallet={mergedWallet} metadata={metadata} showSpam={showSpam} />
+            <NftHoldings wallet={mergedWallet} metadata={metadata} showSpam={showSpam} />
           </>
         )}
 
@@ -187,13 +202,41 @@ export function DashboardContent({ activeTab = 'wallet' }: DashboardContentProps
   );
 }
 
+function ShowSpamToggle({ showSpam, onChange }: { showSpam: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex justify-end -mb-2">
+      <button
+        type="button"
+        onClick={() => onChange(!showSpam)}
+        className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] transition-colors ${
+          showSpam
+            ? 'bg-secondary text-foreground border border-border'
+            : 'text-muted-foreground hover:text-foreground'
+        }`}
+        title={showSpam ? 'Hide spam-marked items' : 'Show items you marked as spam'}
+      >
+        {showSpam ? <Eye size={11} /> : <EyeOff size={11} />}
+        Show spam
+      </button>
+    </div>
+  );
+}
+
 interface TokenListProps {
   wallet: WalletData;
   metadata: Map<string, TokenMeta>;
+  showSpam: boolean;
 }
 
-function TokenList({ wallet, metadata }: TokenListProps) {
+function TokenList({ wallet, metadata, showSpam }: TokenListProps) {
   const { getUsdValue, formatUsd, getSolPrice } = usePrices();
+
+  // Re-render on spam list mutations.
+  const [, forceUpdate] = useState(0);
+  useEffect(() => {
+    const unsub = subscribeSpamFilter(() => forceUpdate((n) => n + 1));
+    return unsub;
+  }, []);
 
   const fungibles = useMemo(
     () => wallet.tokenAccounts.filter((t) => !t.isNft && t.uiAmount > 0),
@@ -213,10 +256,24 @@ function TokenList({ wallet, metadata }: TokenListProps) {
     return rows;
   }, [fungibles, metadata, getUsdValue]);
 
+  // Totals always exclude spam, regardless of the "Show spam" toggle —
+  // once the user has marked something spam, it stops counting toward
+  // their wallet value. The toggle just controls whether spam rows are
+  // visible in the list, not whether they show up in the headline number.
   const solUsd = wallet.solBalance * getSolPrice();
-  const totalUsd = enriched.reduce((s, r) => s + r.usd, 0) + solUsd;
+  const totalUsd = useMemo(
+    () => enriched.filter((r) => !isTokenSpam(r.mint)).reduce((s, r) => s + r.usd, 0) + solUsd,
+    // forceUpdate counter included implicitly via component re-render.
+    [enriched, solUsd],
+  );
 
-  if (wallet.solBalance === 0 && enriched.length === 0) return null;
+  // Visible rows depend on showSpam.
+  const visibleRows = useMemo(() => {
+    if (showSpam) return enriched; // include spam, will style faded inline
+    return enriched.filter((r) => !isTokenSpam(r.mint));
+  }, [enriched, showSpam]);
+
+  if (wallet.solBalance === 0 && visibleRows.length === 0) return null;
 
   return (
     <div className="bg-card border border-border rounded-lg p-5 card-glow">
@@ -242,27 +299,46 @@ function TokenList({ wallet, metadata }: TokenListProps) {
           </div>
         )}
 
-        {enriched.map((row) => (
-          <a
-            key={row.mint}
-            href={`https://solscan.io/token/${row.mint}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-3 p-2.5 rounded-md hover:bg-secondary/50 transition-colors"
-          >
-            <TokenIcon src={row.image} symbol={row.symbol} size={32} />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold text-foreground truncate">{row.symbol}</p>
-              <p className="text-[10px] text-muted-foreground truncate">{row.name}</p>
+        {visibleRows.map((row) => {
+          const spam = isTokenSpam(row.mint);
+          return (
+            <div
+              key={row.mint}
+              className={`flex items-center gap-3 p-2.5 rounded-md hover:bg-secondary/50 transition-colors ${spam ? 'opacity-50' : ''}`}
+            >
+              <a
+                href={`https://solscan.io/token/${row.mint}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 flex-1 min-w-0"
+              >
+                <TokenIcon src={row.image} symbol={row.symbol} size={32} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-semibold text-foreground truncate flex items-center gap-1.5">
+                    {row.symbol}
+                    {spam && (
+                      <span className="text-[8px] uppercase tracking-wider text-muted-foreground border border-border rounded px-1 py-px">
+                        spam
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground truncate">{row.name}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs font-semibold text-foreground">
+                    {row.uiAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                  </p>
+                  {row.usd > 0 && <p className="text-[10px] text-muted-foreground">{formatUsd(row.usd)}</p>}
+                </div>
+              </a>
+              <SpamMenu
+                isSpam={spam}
+                onMark={() => markTokenSpam(row.mint)}
+                onUnmark={() => unmarkTokenSpam(row.mint)}
+              />
             </div>
-            <div className="text-right">
-              <p className="text-xs font-semibold text-foreground">
-                {row.uiAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })}
-              </p>
-              {row.usd > 0 && <p className="text-[10px] text-muted-foreground">{formatUsd(row.usd)}</p>}
-            </div>
-          </a>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
