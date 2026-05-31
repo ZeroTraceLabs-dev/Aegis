@@ -25,12 +25,11 @@ import { setWalletSnapshot, type WalletSnapshot } from '@/lib/cerberusService';
 import { TrustedAddresses } from '@/components/TrustedAddresses';
 import { TokenIcon } from '@/components/TokenIcon';
 import { SpamMenu } from '@/components/SpamMenu';
+import { Switch } from '@/components/ui/switch';
 import {
   Wallet,
   Radio,
   AlertTriangle,
-  Eye,
-  EyeOff,
 } from 'lucide-react';
 
 // Canonical Solana mark for the native SOL row. SPL token list serves the
@@ -203,21 +202,23 @@ export function DashboardContent({ activeTab = 'wallet' }: DashboardContentProps
 }
 
 function ShowSpamToggle({ showSpam, onChange }: { showSpam: boolean; onChange: (v: boolean) => void }) {
+  // Switch primitive's active track derives from --primary, which is oxblood
+  // after the round-three rebrand — so the on state lights up oxblood
+  // without an inline override. Off state remains muted gray via --input.
   return (
-    <div className="flex justify-end -mb-2">
-      <button
-        type="button"
-        onClick={() => onChange(!showSpam)}
-        className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] transition-colors ${
-          showSpam
-            ? 'bg-secondary text-foreground border border-border'
-            : 'text-muted-foreground hover:text-foreground'
-        }`}
-        title={showSpam ? 'Hide spam-marked items' : 'Show items you marked as spam'}
+    <div className="flex items-center justify-end gap-2 -mb-2">
+      <label
+        htmlFor="show-spam-toggle"
+        className="text-[11px] text-foreground cursor-pointer select-none"
       >
-        {showSpam ? <Eye size={11} /> : <EyeOff size={11} />}
         Show spam
-      </button>
+      </label>
+      <Switch
+        id="show-spam-toggle"
+        checked={showSpam}
+        onCheckedChange={onChange}
+        aria-label={showSpam ? 'Hide spam-marked items' : 'Show items you marked as spam'}
+      />
     </div>
   );
 }
