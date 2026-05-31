@@ -1,5 +1,5 @@
 /* Font imports MUST precede @tailwind directives — Tailwind v3 build error otherwise. */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
 
 @tailwind base;
@@ -13,14 +13,18 @@
 
     /* Base background: warm near-black (#0c0a0a) */
     --background: 0 14% 4%;
-    --foreground: 20 6% 90%;
+    /* Foreground: warm cream (~#ede7d9). Earlier off-white (20 6% 90%) read
+       as high-beam-bright against the warm-black bg; pulling the hue into
+       the warm/orange family at the same lightness sits more comfortably
+       in the warm-dark register without losing contrast. */
+    --foreground: 42 36% 89%;
 
     /* Surface: slightly elevated warm-black (#141111) */
     --card: 0 8% 9%;
-    --card-foreground: 20 6% 90%;
+    --card-foreground: 42 36% 89%;
 
     --popover: 0 8% 9%;
-    --popover-foreground: 20 6% 90%;
+    --popover-foreground: 42 36% 89%;
 
     /* Primary / accent: deep oxblood (#7a1e1e) — the watching lamp.
        Restrained dark red brand color; used as the everyday interactive
@@ -31,7 +35,7 @@
     --primary-foreground: 20 6% 96%;
 
     --secondary: 0 8% 11%;
-    --secondary-foreground: 20 6% 90%;
+    --secondary-foreground: 42 36% 89%;
 
     /* Muted: desaturated gray (#78716c) for secondary copy */
     --muted: 0 8% 11%;
@@ -95,9 +99,11 @@
   }
 }
 
-/* Wordmark — Inter Tight, heavy + tight tracking. Anchors the navbar. */
+/* Wordmark — Space Grotesk for more letterform character than the
+   geometric Inter Tight. Falls back through the existing chain so the
+   shape still reads if the network font hasn't loaded. */
 .wordmark {
-  font-family: 'Inter Tight', 'Inter', system-ui, sans-serif;
+  font-family: 'Space Grotesk', 'Inter Tight', 'Inter', system-ui, sans-serif;
   font-weight: 700;
   letter-spacing: -0.03em;
 }
