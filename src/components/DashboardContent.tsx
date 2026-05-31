@@ -22,6 +22,12 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 
+// Canonical Solana mark for the native SOL row. SPL token list serves the
+// same logo for wrapped SOL (mint So11111...112) and it's the authoritative
+// public asset. Hard-coded here only for native SOL — fallback logic in
+// TokenIcon still handles arbitrary SPL tokens that genuinely lack a logo.
+const SOL_LOGO_URL = 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png';
+
 export type DashboardTab = 'wallet' | 'watch' | 'emergency';
 
 const TABS: { id: DashboardTab; label: string; icon: React.ReactNode; danger?: boolean }[] = [
@@ -224,7 +230,7 @@ function TokenList({ wallet, metadata }: TokenListProps) {
       <div className="space-y-1.5">
         {wallet.solBalance > 0 && (
           <div className="flex items-center gap-3 p-2.5 rounded-md hover:bg-secondary/50 transition-colors">
-            <TokenIcon src="" symbol="SOL" size={32} />
+            <TokenIcon src={SOL_LOGO_URL} symbol="SOL" size={32} />
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-foreground">SOL</p>
               <p className="text-[10px] text-muted-foreground">Solana</p>

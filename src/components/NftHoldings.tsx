@@ -47,8 +47,11 @@ export function NftHoldings({ wallet, metadata }: NftHoldingsProps) {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [groupMode, setGroupMode] = useState<'collection' | 'all'>('collection');
   const [search, setSearch] = useState('');
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(['__all_collapsed_init__']));
-  const [collapsedInit, setCollapsedInit] = useState(false);
+  // Default: every collection is collapsed. We track which ones the user
+  // has explicitly expanded — a clean inversion of the old "track collapsed"
+  // semantics, which had a brittle init effect that missed late-loading
+  // collections (DAS metadata arriving after the first paint).
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
   const nfts = wallet.tokenAccounts.filter((t) => t.isNft);
   const collectionMap = useMemo(() => getCollectionMap(), [prices]);
@@ -107,21 +110,13 @@ export function NftHoldings({ wallet, metadata }: NftHoldingsProps) {
     return result;
   }, [filtered]);
 
-  React.useEffect(() => {
-    if (!collapsedInit && collections.length > 0) {
-      const allIds = collections.map((c) => c.id);
-      setCollapsed(new Set(allIds));
-      setCollapsedInit(true);
-    }
-  }, [collections, collapsedInit]);
-
   const totalNftValue = useMemo(
     () => enrichedNfts.reduce((sum, nft) => sum + (nft.floor?.floor || 0), 0),
     [enrichedNfts],
   );
 
   const toggleCollapse = (id: string) => {
-    setCollapsed((prev) => {
+    setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -207,7 +202,7 @@ export function NftHoldings({ wallet, metadata }: NftHoldingsProps) {
       {groupMode === 'collection' && hasCollections ? (
         <div className="space-y-3">
           {collections.map((group) => {
-            const isCollapsed = collapsed.has(group.id);
+            const isCollapsed = !expanded.has(group.id);
             return (
               <div key={group.id} className="border border-border rounded-lg overflow-hidden bg-secondary/20">
                 <button

@@ -16,7 +16,7 @@ export default function Index() {
         {/* Desktop navbar */}
         <div className="hidden sm:flex max-w-6xl mx-auto px-4 h-14 items-center justify-between">
           <div className="flex items-center gap-4">
-            <span className="wordmark text-foreground text-[1.45rem] border-b-2 border-primary pb-0.5">Cerberus</span>
+            <span className="wordmark text-foreground text-[2rem] font-bold border-b-2 border-primary pb-1 leading-none">Cerberus</span>
             <NotificationInline />
           </div>
           <div className="flex items-center gap-3">
