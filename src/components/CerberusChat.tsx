@@ -27,11 +27,11 @@ import { addToWhitelist, isWhitelisted } from '@/lib/whitelistStore';
 function CerberusIcon({ size = 32 }: { size?: number }) {
   return (
     <div
-      className="relative flex items-center justify-center rounded-full overflow-hidden cerberus-icon-bg ring-2 ring-primary/25 shadow-lg shadow-primary/10"
+      className="relative flex items-center justify-center rounded-full overflow-hidden cerberus-icon-bg"
       style={{ width: size, height: size }}
     >
       <img src={cerberusAvatar} alt="Cerberus" className="w-full h-full object-cover" />
-      <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-safe animate-pulse" />
+      <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-safe" />
     </div>
   );
 }
@@ -77,7 +77,7 @@ function MessageBubble({ msg }: { msg: CerberusMessage }) {
     >
       {/* Avatar */}
       <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[10px] overflow-hidden ${
-        isUser ? 'bg-secondary text-foreground' : 'cerberus-icon-bg ring-1 ring-primary/15'
+        isUser ? 'bg-secondary text-foreground' : 'cerberus-icon-bg'
       }`}>
         {isUser ? <User size={14} /> : <img src={cerberusAvatar} alt="Cerberus" className="w-full h-full object-cover" />}
       </div>
@@ -221,7 +221,7 @@ export function CerberusChat() {
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0, opacity: 0 }}
             onClick={() => setOpen(true)}
-            className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-full bg-card border border-primary/30 card-glow hover:border-primary/60 transition-all group"
+            className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-full bg-card border border-oxblood hover:border-primary/60 transition-colors group"
             title="Ask Cerberus"
           >
             <CerberusIcon size={36} />
@@ -238,7 +238,7 @@ export function CerberusChat() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.95 }}
             transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-            className={`fixed z-50 bg-card border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden cerberus-panel ${
+            className={`fixed z-50 bg-card border border-border rounded-md flex flex-col overflow-hidden cerberus-panel ${
               expanded
                 ? 'inset-4 sm:inset-8'
                 : 'bottom-6 right-6 w-[380px] h-[520px] max-h-[80vh]'
@@ -249,8 +249,8 @@ export function CerberusChat() {
               <div className="flex items-center gap-2.5">
                 <CerberusIcon size={28} />
                 <div>
-                  <h3 className="text-[11px] font-bold text-foreground">Cerberus</h3>
-                  <p className="text-[8px] text-muted-foreground">Aegis Security Agent</p>
+                  <h3 className="text-[11px] font-semibold text-foreground">Cerberus</h3>
+                  <p className="text-[8px] text-muted-foreground">Your wallet watchdog</p>
                 </div>
               </div>
               <div className="flex items-center gap-1">
@@ -275,7 +275,7 @@ export function CerberusChat() {
             <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3 cerberus-scroll">
               {messages.length === 0 && (
                 <div className="flex flex-col items-center justify-center h-full text-center">
-                  <div className="cerberus-icon-bg w-20 h-20 rounded-full flex items-center justify-center mb-4 overflow-hidden ring-2 ring-primary/25 shadow-lg shadow-primary/10">
+                  <div className="cerberus-icon-bg w-20 h-20 rounded-full flex items-center justify-center mb-4 overflow-hidden">
                     <img src={cerberusAvatar} alt="Cerberus" className="w-full h-full object-cover" />
                   </div>
                   <h4 className="text-xs font-bold text-foreground mb-1">Cerberus Security Agent</h4>

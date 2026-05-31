@@ -15,7 +15,8 @@ export default {
     },
     extend: {
       fontFamily: {
-        mono: ["JetBrains Mono", "Fira Code", "ui-monospace", "monospace"],
+        sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
+        mono: ["JetBrains Mono", "ui-monospace", "monospace"],
       },
       colors: {
         border: "hsl(var(--border))",
@@ -55,36 +56,14 @@ export default {
           DEFAULT: "hsl(var(--safe))",
           foreground: "hsl(var(--safe-foreground))",
         },
-        sidebar: {
-          DEFAULT: "hsl(var(--sidebar-background))",
-          foreground: "hsl(var(--sidebar-foreground))",
-          primary: "hsl(var(--sidebar-primary))",
-          "primary-foreground": "hsl(var(--sidebar-primary-foreground))",
-          accent: "hsl(var(--sidebar-accent))",
-          "accent-foreground": "hsl(var(--sidebar-accent-foreground))",
-          border: "hsl(var(--sidebar-border))",
-          ring: "hsl(var(--sidebar-ring))",
-        },
-        cyan: {
-          400: "hsl(192 100% 65%)",
-          500: "hsl(192 100% 55%)",
-          600: "hsl(192 80% 40%)",
-        },
-        magenta: {
-          400: "hsl(330 100% 70%)",
-          500: "hsl(330 100% 60%)",
-          600: "hsl(330 80% 45%)",
+        oxblood: {
+          DEFAULT: "hsl(var(--oxblood))",
         },
       },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
-      },
-      boxShadow: {
-        neon: "var(--shadow-neon)",
-        "neon-strong": "var(--shadow-neon-strong)",
-        danger: "var(--shadow-danger)",
       },
       keyframes: {
         "accordion-down": {
@@ -96,19 +75,14 @@ export default {
           to: { height: "0" },
         },
         "fade-in-up": {
-          from: { opacity: "0", transform: "translateY(12px)" },
+          from: { opacity: "0", transform: "translateY(8px)" },
           to: { opacity: "1", transform: "translateY(0)" },
-        },
-        "glow-pulse": {
-          "0%, 100%": { opacity: "0.4" },
-          "50%": { opacity: "1" },
         },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
-        "fade-in-up": "fade-in-up 0.5s ease-out forwards",
-        "glow-pulse": "glow-pulse 2s ease-in-out infinite",
+        "fade-in-up": "fade-in-up 0.3s ease-out forwards",
       },
     },
   },

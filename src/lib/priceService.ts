@@ -1,5 +1,5 @@
 /**
- * Centralized Price Service for ZeroTraceLabs
+ * Centralized price service.
  *
  * Single source of truth for all USD prices:
  * 1. Helius DAS price_per_token (fungible tokens -- injected from useAssetMetadata)

@@ -154,7 +154,7 @@ export function NotificationManager() {
     sendBrowserNotification(
       'healthDrops',
       'Test Notification',
-      'ZeroTraceLabs notifications are working correctly.',
+      'Cerberus notifications are working correctly.',
       { tag: 'test' },
     );
     setTestSent(true);

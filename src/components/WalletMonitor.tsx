@@ -241,11 +241,8 @@ export function WalletMonitor() {
           {/* Status */}
           {!paused && monitoring && !tabPaused && (
             <div className="flex items-center gap-1.5">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-safe opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-safe" />
-              </span>
-              <span className="text-[9px] text-safe font-semibold">LIVE</span>
+              <span className="inline-flex rounded-full h-2 w-2 bg-safe" />
+              <span className="text-[9px] text-safe font-medium">LIVE</span>
             </div>
           )}
           {tabPaused && (

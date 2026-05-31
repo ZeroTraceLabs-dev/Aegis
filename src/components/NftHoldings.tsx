@@ -282,7 +282,7 @@ function NftGrid({ nfts, formatUsd }: NftSubProps) {
           href={`https://solscan.io/token/${nft.mint}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="group border border-border rounded-lg overflow-hidden transition-all bg-secondary/30 hover:border-primary/40 hover:shadow-neon"
+          className="group border border-border rounded-md overflow-hidden transition-colors bg-secondary/30 hover:border-primary/40"
         >
           <div className="aspect-square bg-background relative overflow-hidden">
             {nft.image ? (
@@ -291,7 +291,7 @@ function NftGrid({ nfts, formatUsd }: NftSubProps) {
                   src={nft.image}
                   alt={nft.name}
                   loading="lazy"
-                  className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                  className="absolute inset-0 w-full h-full object-cover"
                   onError={(e) => {
                     const el = e.target as HTMLImageElement;
                     el.style.display = 'none';

@@ -4,7 +4,7 @@
  * Features:
  * - Configure a "safe wallet" escape address
  * - One-click emergency evacuation: bundles SOL + all tokens + NFTs into batch transfers
- * - Clear trust model explanation: user always signs, ZTL never holds keys
+ * - Clear trust model explanation: user always signs; Cerberus never holds keys
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
