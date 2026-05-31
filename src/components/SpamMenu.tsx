@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { MoreVertical } from 'lucide-react';
 
 interface SpamMenuProps {
@@ -13,22 +14,66 @@ interface SpamMenuProps {
  * - Click the dots → menu opens with a single "Mark as spam" / "Unmark as
  *   spam" action (no confirmation, instant).
  * - Click outside → menu closes.
- * - stopPropagation + preventDefault on the button so the menu doesn't
- *   trigger row navigation (the token row is an <a>, the NFT collection
- *   row is a collapse <button>).
+ *
+ * The dropdown is portaled to document.body so an ancestor with
+ * `overflow-hidden` (e.g. the NFT collection card, which needs that to clip
+ * its rounded-border children) can't visually clip the popover. The trigger
+ * stops propagation so clicks don't fall through to the row's collapse
+ * toggle or to the token row's <a> wrapper.
  */
 export function SpamMenu({ isSpam, onMark, onUnmark }: SpamMenuProps) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // Click-outside: close if the mousedown lands outside BOTH the trigger
+  // and the portaled dropdown.
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t)) return;
+      if (dropdownRef.current?.contains(t)) return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
+
+  // Reposition the dropdown when the page scrolls or resizes while open.
+  useEffect(() => {
+    if (!open) return;
+    const updatePos = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (rect) {
+        setPos({
+          top: rect.bottom + 4,
+          right: Math.max(8, window.innerWidth - rect.right),
+        });
+      }
+    };
+    updatePos();
+    window.addEventListener('scroll', updatePos, true);
+    window.addEventListener('resize', updatePos);
+    return () => {
+      window.removeEventListener('scroll', updatePos, true);
+      window.removeEventListener('resize', updatePos);
+    };
+  }, [open]);
+
+  const handleTriggerClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) {
+      setPos({
+        top: rect.bottom + 4,
+        right: Math.max(8, window.innerWidth - rect.right),
+      });
+    }
+    setOpen((o) => !o);
+  };
 
   const handleAction = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -39,18 +84,23 @@ export function SpamMenu({ isSpam, onMark, onUnmark }: SpamMenuProps) {
   };
 
   return (
-    <div ref={ref} className="relative shrink-0">
+    <>
       <button
+        ref={triggerRef}
         type="button"
-        onClick={(e) => { e.stopPropagation(); e.preventDefault(); setOpen((o) => !o); }}
-        className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+        onClick={handleTriggerClick}
+        className="shrink-0 p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
         aria-label="Item options"
         title="Options"
       >
         <MoreVertical size={14} />
       </button>
-      {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-card border border-border rounded-md min-w-[140px] py-1">
+      {open && pos && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{ position: 'fixed', top: pos.top, right: pos.right, minWidth: 140 }}
+          className="z-[60] bg-card border border-border rounded-md py-1"
+        >
           <button
             type="button"
             onClick={handleAction}
@@ -58,8 +108,9 @@ export function SpamMenu({ isSpam, onMark, onUnmark }: SpamMenuProps) {
           >
             {isSpam ? 'Unmark as spam' : 'Mark as spam'}
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
-    </div>
+    </>
   );
 }
