@@ -16,7 +16,10 @@ export default function Index() {
         {/* Desktop navbar */}
         <div className="hidden sm:flex max-w-6xl mx-auto px-4 h-14 items-center justify-between">
           <div className="flex items-center gap-4">
-            <span className="wordmark text-foreground text-[2rem] font-bold border-b-2 border-primary pb-1 leading-none">Cerberus</span>
+            <div className="flex flex-col leading-none">
+              <span className="plaque-mark text-foreground text-[1.2rem]">C E R B E R U S</span>
+              <span className="plaque-kicker text-muted-foreground text-[0.6875rem] mt-1">WATCHDOG</span>
+            </div>
             <NotificationInline />
           </div>
           <div className="flex items-center gap-3">
@@ -38,7 +41,10 @@ export default function Index() {
         {/* Mobile navbar -- two rows */}
         <div className="sm:hidden">
           <div className="flex items-center justify-between px-3 h-12">
-            <span className="wordmark text-foreground text-[1.05rem]">Cerberus</span>
+            <div className="flex flex-col leading-none">
+              <span className="plaque-mark text-foreground text-[1rem]">C E R B E R U S</span>
+              <span className="plaque-kicker text-muted-foreground text-[0.625rem] mt-0.5">WATCHDOG</span>
+            </div>
             <div className="flex items-center gap-2">
               <a
                 href="https://discord.gg/9NaPPj7KMk"

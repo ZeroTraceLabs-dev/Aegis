@@ -108,6 +108,26 @@
   letter-spacing: -0.03em;
 }
 
+/* Two-line plaque composition for the navbar.
+   - .plaque-mark is the top line ("C E R B E R U S") — Space Grotesk
+     weight 600, wide letter-spacing because tracked-out type reads
+     heavier than tight-set type at the same weight, so we drop weight
+     by 100 to compensate.
+   - .plaque-kicker is the bottom line ("WATCHDOG") — Space Grotesk
+     weight 500, less aggressive tracking.
+   Reads as an inscription block, not a logo. */
+.plaque-mark {
+  font-family: 'Space Grotesk', 'Inter Tight', 'Inter', system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.25em;
+}
+
+.plaque-kicker {
+  font-family: 'Space Grotesk', 'Inter Tight', 'Inter', system-ui, sans-serif;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+}
+
 .section-header {
   display: inline-flex;
   align-items: center;
