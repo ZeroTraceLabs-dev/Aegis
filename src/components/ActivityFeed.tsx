@@ -13,7 +13,7 @@ export function ActivityFeed({ wallet }: ActivityFeedProps) {
     <div className="bg-card border border-border rounded-lg p-5 card-glow">
       <div className="flex items-center gap-2 mb-4">
         <Activity size={18} className="text-primary" />
-        <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">RECENT ACTIVITY</h3>
+        <h3 className="section-header text-sm font-semibold text-foreground uppercase tracking-wider">RECENT ACTIVITY</h3>
         <span className="text-xs text-muted-foreground">({wallet.signatures.length})</span>
       </div>
 

@@ -183,7 +183,7 @@ export function NotificationManager() {
           ) : (
             <BellOff size={16} className="text-muted-foreground" />
           )}
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground">
+          <h3 className="section-header text-xs font-semibold uppercase tracking-wider text-foreground">
             Notifications
           </h3>
         </div>

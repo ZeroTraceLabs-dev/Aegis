@@ -1,5 +1,5 @@
 /* Font imports MUST precede @tailwind directives — Tailwind v3 build error otherwise. */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
 
 @tailwind base;
@@ -16,10 +16,10 @@
     --foreground: 20 6% 90%;
 
     /* Surface: slightly elevated warm-black (#141111) */
-    --card: 0 9% 7%;
+    --card: 0 8% 9%;
     --card-foreground: 20 6% 90%;
 
-    --popover: 0 9% 7%;
+    --popover: 0 8% 9%;
     --popover-foreground: 20 6% 90%;
 
     /* Primary / accent: deep amber-brass (#b45309) — the watching lamp.
@@ -93,9 +93,23 @@
 
 /* Wordmark — Inter, tight tracking */
 .wordmark {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: 'Inter Tight', 'Inter', system-ui, sans-serif;
   font-weight: 600;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.03em;
+}
+
+.section-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+.section-header::before {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 0.85em;
+  background: hsl(var(--primary));
+  flex-shrink: 0;
 }
 
 /* Scrollbar-hide utility for horizontal scroll nav */

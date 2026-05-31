@@ -215,9 +215,9 @@ function TokenList({ wallet, metadata }: TokenListProps) {
   return (
     <div className="bg-card border border-border rounded-lg p-5 card-glow">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">Tokens</h3>
+        <h3 className="section-header text-sm font-semibold text-foreground uppercase tracking-wider">Tokens</h3>
         {totalUsd > 0 && (
-          <span className="text-xs font-bold text-accent">{formatUsd(totalUsd)}</span>
+          <span className="text-xs font-bold text-foreground">{formatUsd(totalUsd)}</span>
         )}
       </div>
 
@@ -231,7 +231,7 @@ function TokenList({ wallet, metadata }: TokenListProps) {
             </div>
             <div className="text-right">
               <p className="text-xs font-semibold text-foreground">{wallet.solBalance.toFixed(4)}</p>
-              {solUsd > 0 && <p className="text-[10px] text-accent">{formatUsd(solUsd)}</p>}
+              {solUsd > 0 && <p className="text-[10px] text-muted-foreground">{formatUsd(solUsd)}</p>}
             </div>
           </div>
         )}
@@ -253,7 +253,7 @@ function TokenList({ wallet, metadata }: TokenListProps) {
               <p className="text-xs font-semibold text-foreground">
                 {row.uiAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })}
               </p>
-              {row.usd > 0 && <p className="text-[10px] text-accent">{formatUsd(row.usd)}</p>}
+              {row.usd > 0 && <p className="text-[10px] text-muted-foreground">{formatUsd(row.usd)}</p>}
             </div>
           </a>
         ))}

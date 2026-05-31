@@ -190,7 +190,7 @@ export function TrustedAddresses() {
             <ShieldCheck size={16} />
           </div>
           <div className="text-left">
-            <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
+            <h3 className="section-header text-sm font-bold text-foreground flex items-center gap-2">
               Trusted Addresses
               {whitelist.length > 0 && (
                 <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-safe/15 text-safe font-bold">

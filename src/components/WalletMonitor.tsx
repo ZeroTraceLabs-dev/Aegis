@@ -234,7 +234,7 @@ export function WalletMonitor() {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <Radio size={16} className="text-primary" />
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground">
+          <h3 className="section-header text-xs font-semibold uppercase tracking-wider text-foreground">
             Live Monitor
           </h3>
 

@@ -14,9 +14,9 @@ export default function Index() {
       {/* Navbar */}
       <nav className="sticky top-0 z-50 bg-background/90 backdrop-blur-md border-b border-border">
         {/* Desktop navbar */}
-        <div className="hidden sm:flex max-w-5xl mx-auto px-4 h-14 items-center justify-between">
+        <div className="hidden sm:flex max-w-6xl mx-auto px-4 h-14 items-center justify-between">
           <div className="flex items-center gap-4">
-            <span className="wordmark text-foreground text-base">Cerberus</span>
+            <span className="wordmark text-foreground text-[1.45rem] border-b-2 border-primary pb-0.5">Cerberus</span>
             <NotificationInline />
           </div>
           <div className="flex items-center gap-3">
@@ -46,7 +46,7 @@ export default function Index() {
         {/* Mobile navbar -- two rows */}
         <div className="sm:hidden">
           <div className="flex items-center justify-between px-3 h-12">
-            <span className="wordmark text-foreground text-sm">Cerberus</span>
+            <span className="wordmark text-foreground text-[1.05rem]">Cerberus</span>
             <div className="flex items-center gap-2">
               <a
                 href="https://discord.gg/9NaPPj7KMk"
@@ -73,13 +73,13 @@ export default function Index() {
       <CerberusChat />
 
       {/* Main content */}
-      <main className="max-w-5xl mx-auto px-4 py-6">
+      <main className="max-w-6xl mx-auto px-4 py-6">
         <DashboardContent activeTab={activeTab} />
       </main>
 
       {/* Footer */}
       <footer className="border-t border-border mt-8">
-        <div className="max-w-5xl mx-auto px-4 py-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="max-w-6xl mx-auto px-4 py-6 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
             <span className="wordmark text-foreground text-xs">Cerberus</span>
             <span aria-hidden="true">·</span>
@@ -120,7 +120,7 @@ export default function Index() {
 function TabNav({ activeTab, onTabChange }: { activeTab: DashboardTab; onTabChange: (tab: DashboardTab) => void }) {
   return (
     <div className="sticky top-[5.5rem] sm:top-14 z-40 bg-background/90 backdrop-blur-md border-b border-border">
-      <div className="max-w-5xl mx-auto px-2 sm:px-4">
+      <div className="max-w-6xl mx-auto px-2 sm:px-4">
         <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide py-1.5 flex-nowrap">
           {TABS.map((tab) => {
             const isActive = activeTab === tab.id;

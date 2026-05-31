@@ -268,7 +268,7 @@ export function NuclearEvacuation({ wallet }: NuclearEvacuationProps) {
             <Rocket size={16} className="text-destructive" />
           </div>
           <div className="text-left">
-            <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Nuclear Evacuation</h3>
+            <h3 className="section-header text-sm font-bold text-foreground uppercase tracking-wider">Nuclear Evacuation</h3>
             <p className="text-[10px] text-muted-foreground">
               {safeAddr ? `Safe wallet: ${abbr(safeAddr)}` : 'Configure escape wallet for emergencies'}
             </p>

@@ -138,7 +138,7 @@ export function NftHoldings({ wallet, metadata }: NftHoldingsProps) {
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <Grid3x3 size={18} className="text-accent" />
-          <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">
+          <h3 className="section-header text-sm font-semibold text-foreground uppercase tracking-wider">
             NFT Holdings
           </h3>
           <span className="text-xs text-muted-foreground">({enrichedNfts.length})</span>
@@ -150,7 +150,7 @@ export function NftHoldings({ wallet, metadata }: NftHoldingsProps) {
         </div>
         <div className="flex items-center gap-3">
           {totalNftValue > 0 && (
-            <span className="text-xs font-bold text-accent">{formatUsd(totalNftValue)}</span>
+            <span className="text-xs font-bold text-foreground">{formatUsd(totalNftValue)}</span>
           )}
 
           {hasCollections && (
@@ -231,7 +231,7 @@ export function NftHoldings({ wallet, metadata }: NftHoldingsProps) {
                     <p className="text-[10px] text-muted-foreground">
                       {group.nfts.length} item{group.nfts.length !== 1 ? 's' : ''}
                       {group.totalFloor > 0 && (
-                        <span className="text-accent ml-2 font-medium">{formatUsd(group.totalFloor)}</span>
+                        <span className="text-muted-foreground ml-2 font-medium">{formatUsd(group.totalFloor)}</span>
                       )}
                     </p>
                   </div>
@@ -275,7 +275,7 @@ interface NftSubProps {
 
 function NftGrid({ nfts, formatUsd }: NftSubProps) {
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
       {nfts.map((nft) => (
         <a
           key={nft.mint}
@@ -313,7 +313,7 @@ function NftGrid({ nfts, formatUsd }: NftSubProps) {
             )}
 
             {nft.floor && (
-              <div className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-background/80 backdrop-blur-sm rounded text-[9px] font-bold text-accent border border-accent/20">
+              <div className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-background/80 backdrop-blur-sm rounded text-[9px] font-bold text-foreground border border-border">
                 {formatUsd(nft.floor.floor)}
               </div>
             )}
@@ -362,7 +362,7 @@ function NftList({ nfts, formatUsd }: NftSubProps) {
           </div>
           {nft.floor && (
             <div className="text-right">
-              <p className="text-xs font-semibold text-accent">{formatUsd(nft.floor.floor)}</p>
+              <p className="text-xs font-semibold text-foreground">{formatUsd(nft.floor.floor)}</p>
               <p className="text-[10px] text-muted-foreground">{nft.floor.source}</p>
             </div>
           )}
