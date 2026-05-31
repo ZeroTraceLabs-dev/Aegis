@@ -4,6 +4,7 @@ import { DashboardContent, TABS } from '@/components/DashboardContent';
 import type { DashboardTab } from '@/components/DashboardContent';
 import { NotificationManager } from '@/components/NotificationManager';
 import { CerberusChat } from '@/components/CerberusChat';
+import { Bell } from 'lucide-react';
 
 export default function Index() {
   const [activeTab, setActiveTab] = useState<DashboardTab>('wallet');
@@ -139,17 +140,29 @@ function TabNav({ activeTab, onTabChange }: { activeTab: DashboardTab; onTabChan
 function NotificationInline() {
   const [open, setOpen] = React.useState(false);
 
+  // Active state is wired through to oxblood the moment a real unread-count
+  // signal exists. There's no source plumbed to the navbar yet — the
+  // NotificationManager surfaces no aggregate unread count — so this stays
+  // false. Default state is intentionally dim so the bell recedes against
+  // the wordmark; once a signal flows in, swap this to that signal.
+  const hasUnread = false;
+
   return (
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="p-1.5 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+        className={`relative p-1.5 rounded-md hover:bg-secondary transition-colors ${
+          hasUnread
+            ? 'text-primary'
+            : 'text-muted-foreground/60 hover:text-foreground'
+        }`}
         title="Notifications"
+        aria-label={hasUnread ? 'Notifications (unread)' : 'Notifications'}
       >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-          <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-        </svg>
+        <Bell size={14} />
+        {hasUnread && (
+          <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-primary" />
+        )}
       </button>
 
       {open && (
