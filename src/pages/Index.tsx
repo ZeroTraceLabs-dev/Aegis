@@ -18,7 +18,7 @@ export default function Index() {
           <div className="flex items-center gap-4">
             <div className="flex flex-col leading-none">
               <span className="plaque-mark text-foreground text-[1.2rem]">C E R B E R U S</span>
-              <span className="plaque-kicker text-muted-foreground text-[0.6875rem] mt-1">WATCHDOG</span>
+              <span className="plaque-kicker text-muted-foreground text-[0.6875rem] mt-1">WATCH ⋅ ALERT ⋅ EVADE</span>
             </div>
             <NotificationInline />
           </div>
@@ -43,7 +43,7 @@ export default function Index() {
           <div className="flex items-center justify-between px-3 h-12">
             <div className="flex flex-col leading-none">
               <span className="plaque-mark text-foreground text-[1rem]">C E R B E R U S</span>
-              <span className="plaque-kicker text-muted-foreground text-[0.625rem] mt-0.5">WATCHDOG</span>
+              <span className="plaque-kicker text-muted-foreground text-[0.625rem] mt-0.5">WATCH ⋅ ALERT ⋅ EVADE</span>
             </div>
             <div className="flex items-center gap-2">
               <a
