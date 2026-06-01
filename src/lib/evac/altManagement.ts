@@ -178,6 +178,7 @@ async function signSendConfirmWithRetry(
     const signed = await wallet.signTransaction(tx);
     const sig = await connection.sendRawTransaction(signed.serialize(), {
       skipPreflight: false,
+      preflightCommitment: 'confirmed',
       maxRetries: 3,
     });
     await connection.confirmTransaction(
