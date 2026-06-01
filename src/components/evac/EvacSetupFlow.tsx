@@ -29,8 +29,9 @@ interface EvacSetupFlowProps {
  * Once all four pieces are in place (gas wallet, destination, priority,
  * ALT) the flow swaps to the ArmedStatePanel summary instead.
  *
- * This is the NEW evac surface. The existing NuclearEvacuation component
- * stays mounted alongside it until the next brief's cutover.
+ * This is the sole surface in the Evacuation tab. The legacy
+ * NuclearEvacuation component has been removed; the fire path will be
+ * wired into ArmedStatePanel in the next brief.
  */
 export function EvacSetupFlow({ wallet, metadata }: EvacSetupFlowProps) {
   const { publicKey } = useWallet();
