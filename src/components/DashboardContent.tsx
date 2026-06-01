@@ -26,6 +26,7 @@ import { TrustedAddresses } from '@/components/TrustedAddresses';
 import { TokenIcon } from '@/components/TokenIcon';
 import { SpamMenu } from '@/components/SpamMenu';
 import { Switch } from '@/components/ui/switch';
+import { EvacSetupFlow } from '@/components/evac/EvacSetupFlow';
 import {
   Wallet,
   Radio,
@@ -193,6 +194,7 @@ export function DashboardContent({ activeTab = 'wallet' }: DashboardContentProps
 
         {activeTab === 'emergency' && (
           <>
+            <EvacSetupFlow wallet={mergedWallet} metadata={metadata} />
             <NuclearEvacuation wallet={mergedWallet} />
           </>
         )}
