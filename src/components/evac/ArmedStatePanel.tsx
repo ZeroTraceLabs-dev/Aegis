@@ -86,8 +86,13 @@ export function ArmedStatePanel() {
     try {
       const web3 = await import('@solana/web3.js');
       const { PublicKey } = web3;
+      // Both RPC reads use 'confirmed' commitment to match the
+      // commitment level the ALT was published at (and to avoid the
+      // ~15-30s lag between 'confirmed' and 'finalized' that would
+      // otherwise produce a transient "degraded" banner immediately
+      // after publish, before the cluster finalizes those slots).
       const [balanceLamports, altCheck] = await Promise.all([
-        connection.getBalance(new PublicKey(gasWallet.pubkey)),
+        connection.getBalance(new PublicKey(gasWallet.pubkey), 'confirmed'),
         verifyALT(connection, alt, gasWallet ? new PublicKey(gasWallet.pubkey).toBase58() : ''),
       ]);
       // Note: ALT authority is the MAIN wallet that paid for + created the

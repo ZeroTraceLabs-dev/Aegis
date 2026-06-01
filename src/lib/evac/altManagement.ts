@@ -212,7 +212,10 @@ export async function verifyALT(
   const { PublicKey } = web3;
   try {
     const altPubkey = new PublicKey(altAddress);
-    const res = await connection.getAddressLookupTable(altPubkey);
+    // Read at 'confirmed' commitment to match the publish-side commitment.
+    // Reading at the default (effectively 'finalized') would surface a
+    // false "not reachable" for the first ~30s after publish.
+    const res = await connection.getAddressLookupTable(altPubkey, { commitment: 'confirmed' });
     if (!res.value) return { exists: false, addressCount: 0, authorityMatches: false };
     const authority = res.value.state.authority?.toBase58() ?? null;
     return {
