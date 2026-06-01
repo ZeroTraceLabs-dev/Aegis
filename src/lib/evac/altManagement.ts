@@ -71,7 +71,7 @@ export async function publishALT(
   }
 
   const web3 = await import('@solana/web3.js');
-  const { AddressLookupTableProgram, PublicKey, Transaction } = web3;
+  const { AddressLookupTableProgram, PublicKey } = web3;
   const payer = wallet.publicKey;
 
   // Dedupe + collect all addresses going into the ALT.
@@ -116,6 +116,12 @@ export async function publishALT(
 
   const totalTxs = txGroups.length;
 
+  // Pattern: for each chunk, fetch a fresh blockhash, build, sign,
+  // broadcast, confirm — then move on. Never reuse a blockhash across
+  // iterations. Within an iteration we still guard against the user
+  // taking 90+ seconds to click "Approve" by retrying once with a
+  // fresh blockhash if the first broadcast comes back with a
+  // blockhash-expired error.
   for (let i = 0; i < txGroups.length; i++) {
     onProgress({
       totalTxs,
@@ -125,21 +131,71 @@ export async function publishALT(
         : `Extending protection table (${i + 1}/${totalTxs})…`,
     });
 
-    const tx = new Transaction().add(...txGroups[i]);
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
-    tx.recentBlockhash = blockhash;
-    tx.feePayer = payer;
-
-    const signed = await wallet.signTransaction(tx);
-    const sig: TransactionSignature = await connection.sendRawTransaction(signed.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
-    });
-    await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
+    await signSendConfirmWithRetry(
+      connection,
+      wallet,
+      payer,
+      txGroups[i],
+      (status) => onProgress({ totalTxs, currentTx: i + 1, status }),
+    );
   }
 
   onProgress({ totalTxs, currentTx: totalTxs, status: 'Protection table armed.' });
   return { altAddress: altPubkey.toBase58() };
+}
+
+/**
+ * Build → sign → broadcast → confirm one chunk's worth of instructions.
+ * Fetches a fresh blockhash immediately before construction. If the
+ * broadcast comes back with a blockhash-expired error (which happens
+ * when the user takes ~90+ seconds to approve in their wallet), we
+ * refetch and prompt the user to sign again — one retry only, to
+ * avoid loops.
+ */
+async function signSendConfirmWithRetry(
+  connection: Connection,
+  wallet: WalletContextState,
+  payer: PublicKey,
+  ixs: TransactionInstruction[],
+  onStatus: (status: string) => void,
+): Promise<void> {
+  const web3 = await import('@solana/web3.js');
+  const { Transaction } = web3;
+
+  const attempt = async (label: string): Promise<TransactionSignature> => {
+    onStatus(label);
+    // Fresh blockhash, applied right before the wallet popup. If the
+    // user dawdles on the approve click, the blockhash ages while we
+    // wait — that's what triggers the retry path below.
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+    const tx = new Transaction().add(...ixs);
+    tx.recentBlockhash = blockhash;
+    tx.feePayer = payer;
+
+    if (!wallet.signTransaction) {
+      throw new Error('Main wallet does not support signTransaction.');
+    }
+    const signed = await wallet.signTransaction(tx);
+    const sig = await connection.sendRawTransaction(signed.serialize(), {
+      skipPreflight: false,
+      maxRetries: 3,
+    });
+    await connection.confirmTransaction(
+      { signature: sig, blockhash, lastValidBlockHeight },
+      'confirmed',
+    );
+    return sig;
+  };
+
+  try {
+    await attempt('Sign to publish…');
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const stale = /blockhash not found|block height exceeded|expired/i.test(msg);
+    if (!stale) throw e;
+    // Stale blockhash — refetch and ask the user to sign once more.
+    await attempt('Blockhash expired — sign again to retry…');
+  }
 }
 
 /**

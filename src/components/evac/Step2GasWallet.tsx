@@ -6,7 +6,7 @@ import { getGasWallet, setGasWallet, markGasReady } from '@/lib/evac/configStore
 import { generateGasWallet, encryptGasWallet } from '@/lib/evac/keyManagement';
 
 const REQUIRED_SOL = 0.1;
-const POLL_MS = 5000;
+const POLL_MS = 2000;
 
 /**
  * Step 2 — Generate and fund the gas sub-wallet.
@@ -189,7 +189,14 @@ export function Step2GasWallet() {
 
       <div className="border-t border-border pt-4">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-[11px] text-muted-foreground">Current balance</span>
+          <span className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+            Current balance
+            <span
+              className="inline-block w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-pulse"
+              title={`Polling every ${POLL_MS / 1000}s`}
+              aria-label="Live balance polling"
+            />
+          </span>
           <span className="text-[11px] font-mono text-foreground">
             {balance === null ? '— SOL' : `${balance.toFixed(4)} SOL`}
           </span>
