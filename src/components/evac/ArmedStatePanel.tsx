@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useConnection } from '@solana/wallet-adapter-react';
+import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import {
   ShieldCheck,
   AlertTriangle,
@@ -17,6 +17,8 @@ import {
   type AssetCategory,
 } from '@/lib/evac/configStore';
 import { verifyALT } from '@/lib/evac/altManagement';
+import { decryptGasWalletSecret } from '@/lib/evac/keyManagement';
+import { planSweep, executeSweep, type SweepPlan, type SweepResult } from '@/lib/evac/sweep';
 
 const HEALTH_POLL_MS = 30_000;
 const GAS_WARN_THRESHOLD = 0.05;
@@ -61,8 +63,27 @@ const CATEGORY_LABEL: Record<AssetCategory, string> = {
  * via Solana CLI if they want their rent back). Disarm here only
  * wipes Cerberus's pointers.
  */
+type DisarmPhase = 'idle' | 'planning' | 'confirming' | 'executing' | 'success' | 'error';
+
+interface DisarmState {
+  phase: DisarmPhase;
+  plan: SweepPlan | null;
+  result: SweepResult | null;
+  statusText: string;
+  error: string | null;
+}
+
+const INITIAL_DISARM: DisarmState = {
+  phase: 'idle',
+  plan: null,
+  result: null,
+  statusText: '',
+  error: null,
+};
+
 export function ArmedStatePanel() {
   const { connection } = useConnection();
+  const walletAdapter = useWallet();
   const gasWallet = getGasWallet();
   const destination = getDestination();
   const priority = getPriority();
@@ -77,7 +98,8 @@ export function ArmedStatePanel() {
     checking: false,
   });
   const [copied, setCopied] = useState<'gas' | 'dest' | 'alt' | null>(null);
-  const [confirmDisarm, setConfirmDisarm] = useState(false);
+  const [disarm, setDisarm] = useState<DisarmState>(INITIAL_DISARM);
+  const [sigCopied, setSigCopied] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const runHealthCheck = useCallback(async () => {
@@ -127,6 +149,124 @@ export function ArmedStatePanel() {
       setTimeout(() => setCopied(null), 1500);
     });
   }, []);
+
+  // ── Sweep & Disarm flow ───────────────────────────────────────
+  //
+  // State machine: idle → planning → confirming → executing → success
+  //                                       ↓            ↓
+  //                                    (cancel)     error → retry/cancel
+  //
+  // Storage is NOT cleared until the user dismisses the success view
+  // (Done click) or until the confirm-skip branch fires for a
+  // dust-balance disarm. Any failure between confirm and confirmation
+  // leaves armed state fully intact.
+
+  const handleStartDisarm = useCallback(async () => {
+    if (!gasWallet) return;
+    setDisarm({ ...INITIAL_DISARM, phase: 'planning' });
+    try {
+      const web3 = await import('@solana/web3.js');
+      const { PublicKey } = web3;
+      const plan = await planSweep(connection, new PublicKey(gasWallet.pubkey));
+      setDisarm({ ...INITIAL_DISARM, phase: 'confirming', plan });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setDisarm({
+        ...INITIAL_DISARM,
+        phase: 'error',
+        error: `Could not read gas wallet balance: ${msg}. Your funds and configuration are still in place.`,
+      });
+    }
+  }, [connection, gasWallet]);
+
+  const handleConfirmDisarm = useCallback(async () => {
+    if (!gasWallet || !disarm.plan) return;
+
+    // Skip-sweep branch: dust balance, just clear localStorage.
+    if (!disarm.plan.shouldSweep) {
+      disarmEvac();
+      // Component unmounts as armed state vanishes — no success view.
+      return;
+    }
+
+    if (!walletAdapter.publicKey) {
+      setDisarm((d) => ({
+        ...d,
+        phase: 'error',
+        error: 'Main wallet disconnected. Reconnect and retry.',
+      }));
+      return;
+    }
+
+    setDisarm((d) => ({
+      ...d,
+      phase: 'executing',
+      statusText: 'Requesting signature to decrypt gas wallet…',
+    }));
+
+    let decryptedSecret: Uint8Array | null = null;
+    try {
+      decryptedSecret = await decryptGasWalletSecret(walletAdapter, gasWallet);
+
+      const result = await executeSweep(
+        connection,
+        decryptedSecret,
+        walletAdapter.publicKey,
+        disarm.plan.sweepLamports,
+        (msg) => setDisarm((d) => ({ ...d, statusText: msg })),
+      );
+
+      // Sweep confirmed on-chain — zero the decrypted key immediately.
+      decryptedSecret.fill(0);
+      decryptedSecret = null;
+
+      // Hold result on screen so the user can copy the tx signature.
+      // disarmEvac() runs on Done click, not here, so the signature
+      // survives long enough to be read.
+      setDisarm((d) => ({
+        ...d,
+        phase: 'success',
+        result,
+        statusText: '',
+      }));
+    } catch (e) {
+      if (decryptedSecret) {
+        decryptedSecret.fill(0);
+        decryptedSecret = null;
+      }
+      const msg = e instanceof Error ? e.message : String(e);
+      setDisarm((d) => ({
+        ...d,
+        phase: 'error',
+        error: `Sweep failed: ${msg}. Your funds and configuration are still in place.`,
+      }));
+    }
+  }, [gasWallet, disarm.plan, walletAdapter, connection]);
+
+  const handleRetryDisarm = useCallback(() => {
+    // Re-plan rather than re-execute — if the previous tx actually
+    // confirmed despite the error, the balance is now low enough to
+    // route through the skip-sweep branch.
+    handleStartDisarm();
+  }, [handleStartDisarm]);
+
+  const handleCancelDisarm = useCallback(() => {
+    setDisarm(INITIAL_DISARM);
+  }, []);
+
+  const handleDoneDisarm = useCallback(() => {
+    // Success tail: clear storage now that the user has seen the
+    // signature. Component unmounts as armed state vanishes.
+    disarmEvac();
+  }, []);
+
+  const copySweepSignature = useCallback(() => {
+    if (!disarm.result) return;
+    navigator.clipboard.writeText(disarm.result.signature).then(() => {
+      setSigCopied(true);
+      setTimeout(() => setSigCopied(false), 1500);
+    });
+  }, [disarm.result]);
 
   if (!gasWallet || !destination || !priority || !alt) {
     return (
@@ -262,34 +402,153 @@ export function ArmedStatePanel() {
         </button>
       </div>
 
-      {/* Disarm */}
+      {/* Sweep & Disarm */}
       <div className="border-t border-border pt-4">
-        {!confirmDisarm ? (
+        {disarm.phase === 'idle' && (
           <button
             type="button"
-            onClick={() => setConfirmDisarm(true)}
+            onClick={handleStartDisarm}
             className="w-full px-4 py-2.5 rounded-md border border-border text-[11px] text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
           >
-            Disarm
+            Sweep &amp; Disarm
           </button>
-        ) : (
-          <div className="space-y-2">
-            <p className="text-[11px] text-foreground">
-              Disarm clears Cerberus's evac configuration. Your funds, gas
-              sub-wallet, and on-chain table are not touched — only this
-              app's pointers to them. Confirm?
+        )}
+
+        {disarm.phase === 'planning' && (
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-md border border-border">
+            <Loader2 size={12} className="animate-spin text-muted-foreground" />
+            <span className="text-[11px] text-muted-foreground">
+              Reading gas sub-wallet balance…
+            </span>
+          </div>
+        )}
+
+        {disarm.phase === 'confirming' && disarm.plan && (
+          <div className="space-y-3">
+            <p className="text-[11px] font-semibold text-foreground uppercase tracking-wider">
+              Sweep &amp; Disarm
             </p>
+            {disarm.plan.shouldSweep ? (
+              <p className="text-[11px] text-foreground leading-relaxed">
+                Returns{' '}
+                <span className="font-mono text-primary">
+                  {formatSol(disarm.plan.sweepLamports)} SOL
+                </span>{' '}
+                from your gas sub-wallet to your main wallet
+                {walletAdapter.publicKey && (
+                  <>
+                    {' '}(<span className="font-mono">
+                      {abbrAddr(walletAdapter.publicKey.toBase58())}
+                    </span>)
+                  </>
+                )}
+                , then clears Cerberus's evac configuration. The on-chain
+                protection table remains and can be deactivated via the
+                Solana CLI to reclaim its rent later.
+              </p>
+            ) : (
+              <p className="text-[11px] text-foreground leading-relaxed">
+                Gas sub-wallet has{' '}
+                <span className="font-mono">
+                  {disarm.plan.gasBalanceLamports.toLocaleString()} lamports
+                </span>{' '}
+                — below the minimum recoverable (
+                {(disarm.plan.rentExemptLamports + disarm.plan.feeBufferLamports).toLocaleString()}{' '}
+                lamports incl. rent + fee). Disarming will clear
+                configuration without sweeping. The on-chain protection
+                table remains and can be deactivated via the Solana CLI
+                to reclaim its rent later.
+              </p>
+            )}
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => { disarmEvac(); setConfirmDisarm(false); }}
+                onClick={handleConfirmDisarm}
                 className="flex-1 px-4 py-2 rounded-md bg-destructive text-destructive-foreground text-[11px] font-semibold hover:opacity-90 transition-opacity"
               >
-                Confirm disarm
+                {disarm.plan.shouldSweep ? 'Confirm sweep & disarm' : 'Confirm disarm'}
               </button>
               <button
                 type="button"
-                onClick={() => setConfirmDisarm(false)}
+                onClick={handleCancelDisarm}
+                className="px-4 py-2 rounded-md border border-border text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {disarm.phase === 'executing' && (
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-md border border-primary/40 bg-primary/5">
+            <Loader2 size={12} className="animate-spin text-primary shrink-0" />
+            <span className="text-[11px] text-foreground">
+              {disarm.statusText || 'Working…'}
+            </span>
+          </div>
+        )}
+
+        {disarm.phase === 'success' && disarm.result && (
+          <div className="space-y-3 p-3 border border-primary/40 bg-primary/5 rounded-md">
+            <div className="flex items-start gap-2">
+              <Check size={14} className="text-primary shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-[11px] font-semibold text-foreground">
+                  Disarmed
+                </p>
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  <span className="font-mono text-foreground">
+                    {formatSol(disarm.result.sweptLamports)} SOL
+                  </span>{' '}
+                  returned to your main wallet.
+                </p>
+              </div>
+            </div>
+            <div>
+              <p className="text-[9px] uppercase tracking-wider text-muted-foreground mb-1">
+                Transaction
+              </p>
+              <p className="font-mono text-[10px] text-foreground break-all leading-relaxed mb-2">
+                {disarm.result.signature}
+              </p>
+              <button
+                type="button"
+                onClick={copySweepSignature}
+                className="flex items-center gap-1.5 px-2 py-1 rounded border border-border text-[10px] text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+              >
+                {sigCopied ? <Check size={11} className="text-safe" /> : <Copy size={11} />}
+                {sigCopied ? 'Copied' : 'Copy signature'}
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={handleDoneDisarm}
+              className="w-full px-4 py-2 rounded-md bg-primary text-primary-foreground text-[11px] font-semibold hover:opacity-90 transition-opacity"
+            >
+              Done
+            </button>
+          </div>
+        )}
+
+        {disarm.phase === 'error' && (
+          <div className="space-y-3 p-3 border border-destructive/40 bg-destructive/10 rounded-md">
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={14} className="text-destructive shrink-0 mt-0.5" />
+              <p className="text-[11px] text-destructive leading-relaxed">
+                {disarm.error}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleRetryDisarm}
+                className="flex-1 px-4 py-2 rounded-md bg-destructive text-destructive-foreground text-[11px] font-semibold hover:opacity-90 transition-opacity"
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelDisarm}
                 className="px-4 py-2 rounded-md border border-border text-[11px] text-muted-foreground hover:text-foreground transition-colors"
               >
                 Cancel
@@ -300,6 +559,15 @@ export function ArmedStatePanel() {
       </div>
     </div>
   );
+}
+
+function abbrAddr(a: string): string {
+  if (a.length <= 12) return a;
+  return `${a.slice(0, 6)}…${a.slice(-4)}`;
+}
+
+function formatSol(lamports: number): string {
+  return (lamports / 1e9).toFixed(4);
 }
 
 function SummaryRow({
