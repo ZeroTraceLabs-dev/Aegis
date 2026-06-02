@@ -151,12 +151,13 @@ export function DashboardContent({ activeTab = 'wallet' }: DashboardContentProps
         uiAmount: 1,
         decimals: 0,
         isNft: true,
-        // DAS doesn't tell us the underlying token program for an NFT
-        // and the on-chain scan didn't surface it, so we tag 'spl' as
-        // the most likely case (Metaplex NFTs are standard SPL Token).
-        // Mistagged Token-2022 NFTs will fail their own fire-path tx
-        // in isolation — acceptable until DAS metadata wires up.
+        // The DAS-only path covers cNFTs (Bubblegum) and MPL Core
+        // assets, neither of which lives in an SPL token account, so
+        // tokenProgram is irrelevant for them. We still set 'spl' for
+        // schema compatibility — the fire engine routes by nftFormat,
+        // not tokenProgram, for any isNft asset.
         tokenProgram: 'spl',
+        nftFormat: nft.format,
       });
     }
 

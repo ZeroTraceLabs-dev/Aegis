@@ -382,6 +382,7 @@ export function ArmedStatePanel({ wallet: walletData, metadata }: ArmedStatePane
         Object.values(collMap).filter((cid) => isNftCollectionSpam(cid)),
       );
 
+      const { RPC_ENDPOINT: dasRpcUrl } = await import('@/lib/rpc');
       const result = await executeEvac({
         connection,
         walletAdapter,
@@ -393,6 +394,10 @@ export function ArmedStatePanel({ wallet: walletData, metadata }: ArmedStatePane
         spamCollectionIds,
         priority,
         altAddress: alt,
+        // Helius RPC is used for getAsset/getAssetProof during cNFT
+        // and Core transfer construction. Same endpoint as
+        // useAssetMetadata uses for the scan-time DAS calls.
+        dasRpcUrl,
         metadataByMint: new Map(
           Array.from(metadata.entries()).map(([k, v]) => [
             k,

@@ -11,20 +11,32 @@
  *   priority fee   100,000   lamports  (set via ComputeUnitPrice below)
  *   subtotal       105,000   lamports per tx
  *
- * With a +20% safety buffer the required reserve is:
- *   max(MIN_RESERVE, ceil(critical_priority_txs * 105,000 * 1.20))
+ * Plus, for any SPL transfer that creates a new destination ATA, the
+ * gas wallet covers the ATA rent-exempt minimum (~2.04M lamports per
+ * ATA). cNFTs and MPL Core assets DO NOT use ATAs, so they're
+ * significantly cheaper at scale — 100 cNFTs are ~200× cheaper than
+ * 100 standard SPL NFTs.
  *
- * Transfers per tx is the crux. With an ALT compressing well-known
- * programs and mint addresses, but with source/destination ATAs as
- * uncompressed accounts, real-world packing lands closer to 8-12
- * transfers per tx. We use 10 as the planning assumption — slightly
- * pessimistic, so the precondition rarely under-provisions.
+ * Precondition baseline:
+ *   max(MIN_RESERVE, ceil((critical+priority) cost * 1.20))
+ *
+ * Packing strategy in fire.ts groups by program ID + NFT format so
+ * txs never mix programs. The estimate mirrors that bucketing
+ * exactly: a wallet with 11 SPL tokens, 11 Token-2022 tokens, 11 SPL
+ * NFTs, 11 cNFTs, and 11 Core NFTs estimates 5 buckets × 2 txs = 10
+ * txs even though the asset total only crosses one packing boundary
+ * naively.
  */
 
 import type { TokenAccount } from '@/hooks/useWalletScan';
 
 /** Base + priority fee per evac transaction. */
 export const PER_TX_LAMPORTS = 105_000;
+
+/** Rent-exempt minimum for a new SPL token account (165 bytes). The
+ *  gas wallet pays this when it creates a destination ATA via the
+ *  idempotent ATA-create ix. cNFTs and Core assets don't use ATAs. */
+export const ATA_RENT_LAMPORTS = 2_039_280;
 
 /** Planning assumption: transfers per v0 transaction. Empirically the
  *  observed cap with ALT-compressed mints + uncompressed ATAs is ~12;
@@ -67,9 +79,49 @@ export interface TierBreakdown {
   totalTransfers: number;
   txCount: number;
   lamports: number;
+  /** Format-aware NFT sub-counts. Sum equals nftCount. Surfaced for
+   *  debugging/logging; the confirmation modal only reads nftCount. */
+  nftBreakdown: {
+    spl: number;
+    cnft: number;
+    core: number;
+  };
 }
 
 import type { PriorityConfig, AssetCategory } from './configStore';
+
+/**
+ * Bucket categories used by the gas estimator. Mirrors the packing
+ * groups in fire.ts so the estimated tx count matches what the engine
+ * will actually emit.
+ *
+ *   'spl-token'  — fungibles under SPL Token Program
+ *   'token-2022' — fungibles + NFTs under SPL Token-2022 (shared
+ *                  bucket because fire.ts routes both via the same
+ *                  programId)
+ *   'spl-nft'    — NFTs under SPL Token Program (separate bucket from
+ *                  spl-token for fate isolation)
+ *   'cnft'       — Bubblegum compressed NFTs (no ATA rent)
+ *   'core'       — MPL Core NFTs (no ATA rent)
+ */
+type GasBucket = 'spl-token' | 'token-2022' | 'spl-nft' | 'cnft' | 'core';
+
+function classifyAssetBucket(t: TokenAccount): GasBucket {
+  if (t.isNft) {
+    if (t.nftFormat === 'cnft') return 'cnft';
+    if (t.nftFormat === 'core') return 'core';
+    // SPL NFT or unknown — both routed through the SPL transfer path
+    // for build purposes; unknown will fail in build but still gets
+    // budgeted so the precondition doesn't underestimate.
+    return t.tokenProgram === 'token-2022' ? 'token-2022' : 'spl-nft';
+  }
+  return t.tokenProgram === 'token-2022' ? 'token-2022' : 'spl-token';
+}
+
+/** Does this bucket create destination ATAs (and therefore pay rent)? */
+function bucketUsesAta(b: GasBucket): boolean {
+  return b === 'spl-token' || b === 'spl-nft' || b === 'token-2022';
+}
 
 /**
  * Compute the gas estimate given the user's wallet contents and
@@ -84,31 +136,21 @@ export function estimateGas(
   nftCollectionOf: (mint: string) => string | null,
   isCollectionSpam: (collectionId: string) => boolean,
 ): GasEstimate {
-  // Categorize assets. SOL is "1 transfer" if balance > 0; tokens and
-  // nfts are counted individually after spam filtering.
   const fungibleTokens = tokenAccounts.filter(
     (t) => !t.isNft && t.uiAmount > 0 && !isTokenSpam(t.mint),
   );
   const nfts = tokenAccounts.filter((t) => {
     if (!t.isNft) return false;
     const collId = nftCollectionOf(t.mint);
-    // NFTs without a known collection still evacuate but pass the spam
-    // check on the mint itself.
     if (collId && isCollectionSpam(collId)) return false;
     if (isTokenSpam(t.mint)) return false;
     return true;
   });
 
-  const counts = {
-    sol: walletSolBalance > 0 ? 1 : 0,
-    tokens: fungibleTokens.length,
-    nfts: nfts.length,
-  };
-
   const breakdown = {
-    critical: tierBreakdown(priority.tiers.critical, counts),
-    priority: tierBreakdown(priority.tiers.priority, counts),
-    standard: tierBreakdown(priority.tiers.standard, counts),
+    critical: tierBreakdown(priority.tiers.critical, walletSolBalance, fungibleTokens, nfts),
+    priority: tierBreakdown(priority.tiers.priority, walletSolBalance, fungibleTokens, nfts),
+    standard: tierBreakdown(priority.tiers.standard, walletSolBalance, fungibleTokens, nfts),
   };
 
   const guaranteedRaw =
@@ -138,20 +180,55 @@ export function estimateGas(
 
 function tierBreakdown(
   categories: AssetCategory[],
-  counts: { sol: number; tokens: number; nfts: number },
+  solBalance: number,
+  fungibles: TokenAccount[],
+  nfts: TokenAccount[],
 ): TierBreakdown {
-  const solCount = categories.includes('sol') ? counts.sol : 0;
-  const tokenCount = categories.includes('tokens') ? counts.tokens : 0;
-  const nftCount = categories.includes('nfts') ? counts.nfts : 0;
-  const totalTransfers = solCount + tokenCount + nftCount;
-  const txCount = totalTransfers === 0 ? 0 : Math.ceil(totalTransfers / TRANSFERS_PER_TX);
+  const includeSol = categories.includes('sol');
+  const includeTokens = categories.includes('tokens');
+  const includeNfts = categories.includes('nfts');
+
+  const tierFungibles = includeTokens ? fungibles : [];
+  const tierNfts = includeNfts ? nfts : [];
+
+  // Bucket by group. The 'token-2022' bucket carries both fungibles
+  // and NFTs because fire.ts routes them through the same programId.
+  const buckets: Record<GasBucket, number> = {
+    'spl-token': 0,
+    'token-2022': 0,
+    'spl-nft': 0,
+    cnft: 0,
+    core: 0,
+  };
+  for (const t of tierFungibles) buckets[classifyAssetBucket(t)]++;
+  for (const n of tierNfts) buckets[classifyAssetBucket(n)]++;
+
+  // Per-bucket tx count + ATA rent. SOL is its own single-ix bucket.
+  let txCount = includeSol && solBalance > 0 ? 1 : 0;
+  let ataRent = 0;
+  for (const bucket of Object.keys(buckets) as GasBucket[]) {
+    const count = buckets[bucket];
+    if (count === 0) continue;
+    txCount += Math.ceil(count / TRANSFERS_PER_TX);
+    if (bucketUsesAta(bucket)) ataRent += count * ATA_RENT_LAMPORTS;
+  }
+
+  const solCount = includeSol && solBalance > 0 ? 1 : 0;
+  const tokenCount = tierFungibles.length;
+  const nftCount = tierNfts.length;
+
   return {
     solCount,
     tokenCount,
     nftCount,
-    totalTransfers,
+    totalTransfers: solCount + tokenCount + nftCount,
     txCount,
-    lamports: txCount * PER_TX_LAMPORTS,
+    lamports: txCount * PER_TX_LAMPORTS + ataRent,
+    nftBreakdown: {
+      spl: tierNfts.filter((n) => classifyAssetBucket(n) === 'spl-nft' || classifyAssetBucket(n) === 'token-2022').length,
+      cnft: tierNfts.filter((n) => classifyAssetBucket(n) === 'cnft').length,
+      core: tierNfts.filter((n) => classifyAssetBucket(n) === 'core').length,
+    },
   };
 }
 

@@ -41,6 +41,22 @@ function resolveToken(mint: string) {
  */
 export type TokenProgramTag = 'spl' | 'token-2022';
 
+/**
+ * Discriminator for NFT-like assets. Drives transfer-path routing in
+ * the fire engine:
+ *
+ *   'spl'     → SPL Token transferChecked (works for both Token Program
+ *               and Token-2022; the tokenProgram tag picks which).
+ *   'cnft'    → Metaplex Bubblegum transfer (Merkle-tree compressed).
+ *   'core'    → Metaplex Core transferV1 (standalone asset accounts).
+ *   'unknown' → format detection didn't classify; excluded from evac
+ *               with a clear failure surfaced in setup before arm.
+ *
+ * Only meaningful when `isNft === true`. Fungible tokens leave it
+ * undefined.
+ */
+export type NftFormat = 'spl' | 'cnft' | 'core' | 'unknown';
+
 export interface TokenAccount {
   mint: string;
   symbol: string;
@@ -52,6 +68,9 @@ export interface TokenAccount {
   delegatedAmount?: number;
   isNft: boolean;
   tokenProgram: TokenProgramTag;
+  /** Required when isNft=true so the fire engine can pick the right
+   *  transfer SDK. Undefined for fungible tokens. */
+  nftFormat?: NftFormat;
 }
 
 export interface DelegateApproval {
@@ -174,6 +193,12 @@ export function useWalletData(): WalletData {
               : undefined,
             isNft,
             tokenProgram,
+            // Anything found via getParsedTokenAccountsByOwner lives in
+            // an SPL token account by definition — that's 'spl' format,
+            // regardless of whether it's Token Program or Token-2022.
+            // cNFT and Core NFTs don't have token accounts and only
+            // surface via the DAS path (see DashboardContent merge).
+            nftFormat: isNft ? 'spl' : undefined,
           });
 
           if (info.delegate && info.delegatedAmount) {

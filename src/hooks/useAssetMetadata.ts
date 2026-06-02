@@ -22,6 +22,13 @@ export interface TokenMeta {
   decimals?: number;
 }
 
+/**
+ * NFT format discriminator copied from useWalletScan.NftFormat so this
+ * module doesn't depend on the scan hook. Drives transfer-path routing
+ * downstream in the fire engine.
+ */
+export type DasNftFormat = 'spl' | 'cnft' | 'core' | 'unknown';
+
 /** An NFT discovered by DAS that may not be in the SPL token list */
 export interface DasNft {
   mint: string;
@@ -30,6 +37,33 @@ export interface DasNft {
   image: string;
   compressed: boolean;
   collection?: string;
+  /** Definitive format classification from the DAS `interface` and
+   *  `compression.compressed` fields. 'unknown' means DAS surfaced an
+   *  asset we can't safely transfer — the fire path excludes it. */
+  format: DasNftFormat;
+}
+
+/**
+ * Classify a DAS asset's NFT transfer format. Centralised so any
+ * future DAS-interface additions land in one place.
+ *
+ * Rules:
+ *   MplCoreAsset                        → 'core'
+ *   any compressed asset (Bubblegum)    → 'cnft'
+ *   V1_NFT / V2_NFT / ProgrammableNFT   → 'spl'  (Metaplex/SPL Token-based)
+ *   anything else NFT-like              → 'unknown'
+ *
+ * pNFT (ProgrammableNFT) is treated as 'spl' per the brief — most
+ * transfer fine via createTransferCheckedInstruction; rule-set
+ * failures surface in the per-tx error report.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function detectNftFormatFromDas(item: any): DasNftFormat {
+  const iface = item.interface || '';
+  if (iface === 'MplCoreAsset') return 'core';
+  if (item.compression?.compressed === true) return 'cnft';
+  if (iface === 'V1_NFT' || iface === 'V2_NFT' || iface === 'ProgrammableNFT') return 'spl';
+  return 'unknown';
 }
 
 const _cache = new Map<string, TokenMeta>();
@@ -175,6 +209,10 @@ export function useTokenMetadata(
                   (g: any) => g.group_key === 'collection',
                 );
 
+                const format = detectNftFormatFromDas(item);
+                if (format === 'unknown') {
+                  console.warn(`[Meta] Unknown NFT format for ${id} (interface=${item.interface}). Excluded from evac.`);
+                }
                 _dasNftCache.push({
                   mint: id,
                   name: m.name || `NFT ${id.slice(0, 4)}...${id.slice(-4)}`,
@@ -182,6 +220,7 @@ export function useTokenMetadata(
                   image: image,
                   compressed: !!item.compression?.compressed,
                   collection: collGroup?.group_value || undefined,
+                  format,
                 });
               }
 

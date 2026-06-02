@@ -115,6 +115,12 @@ export interface FireInputs {
   altAddress: string;
   /** Asset display names by mint. Optional — falls back to mint short. */
   metadataByMint?: Map<string, { symbol?: string; name?: string }>;
+  /** Helius DAS RPC endpoint. Required when any cNFT or MPL Core
+   *  asset is being evacuated — those formats need getAsset /
+   *  getAssetProof calls that aren't available on the standard
+   *  Solana RPC. Pass the same VITE_HELIUS_RPC_URL value used by
+   *  the rest of the app. */
+  dasRpcUrl: string;
   onProgress: (event: FireProgressEvent) => void;
 }
 
@@ -277,7 +283,14 @@ interface TierContext {
   connection: Connection;
   walletAdapter: WalletContextState;
   gasKeypair: Keypair;
+  dasRpcUrl: string;
   onProgress: (event: FireProgressEvent) => void;
+  /** Populated by buildTierTransfers when an asset's ixs can't be
+   *  constructed (DAS fetch failure for a cNFT, missing fields, etc.).
+   *  processTier surfaces these as tx-failed events alongside per-tx
+   *  simulation/broadcast failures so the user sees a single unified
+   *  failure list. */
+  buildFailures?: { asset: AssetDescriptor; error: string }[];
 }
 
 async function processTier(ctx: TierContext): Promise<TierResult> {
@@ -289,6 +302,15 @@ async function processTier(ctx: TierContext): Promise<TierResult> {
   //    may produce multiple ixs — token transfers carry an idempotent
   //    ATA-create alongside the transfer).
   const planned = await buildTierTransfers(ctx);
+
+  // 1a. Surface any assets that couldn't even be built (DAS fetch
+  //     failures for cNFT proofs, unknown NFT formats, etc.). These
+  //     skip the simulate/broadcast pipeline entirely and land in
+  //     result.failed[] before the tx work begins.
+  for (const bf of ctx.buildFailures ?? []) {
+    result.failed.push({ assets: [bf.asset], error: bf.error });
+    ctx.onProgress({ type: 'tx-failed', tier: ctx.tier, assets: [bf.asset], error: bf.error });
+  }
 
   // 2. Pack into v0 txs with compute-budget ixs prepended. Each pack
   //    carries the assets it covers so failures can be attributed back
@@ -539,12 +561,30 @@ async function processTier(ctx: TierContext): Promise<TierResult> {
 
 /** Which on-chain program a planned transfer's ixs invoke. Drives
  *  fate-isolation in packing: txs never mix groups, so a failure in
- *  one group's ix can't atomic-rollback transfers in another. */
-type TransferGroup = 'system' | 'spl' | 'token-2022';
+ *  one group's ix can't atomic-rollback transfers in another.
+ *
+ *  Six groups in practice:
+ *    'system'     — SOL transfer (SystemProgram)
+ *    'spl-token'  — fungible SPL Token Program tokens
+ *    'token-2022' — fungible SPL Token-2022 tokens
+ *    'spl-nft'    — standard SPL Token Program NFTs (kept distinct
+ *                   from spl-token so a hostile token doesn't poison
+ *                   a clean NFT batch and vice versa)
+ *    'cnft'       — Bubblegum compressed NFTs
+ *    'core'       — MPL Core NFTs
+ */
+type TransferGroup =
+  | 'system'
+  | 'spl-token'
+  | 'token-2022'
+  | 'spl-nft'
+  | 'cnft'
+  | 'core';
 
 interface PlannedTransfer {
   /** Instructions for this single asset (SystemProgram.transfer for
-   *  SOL; createIdempotent + transferChecked for SPL/NFTs). */
+   *  SOL; createIdempotent + transferChecked for SPL/NFTs; Bubblegum
+   *  transfer for cNFTs; MPL Core transferV1 for Core). */
   ixs: TransactionInstruction[];
   asset: AssetDescriptor;
   group: TransferGroup;
@@ -564,6 +604,8 @@ async function buildTierTransfers(ctx: TierContext): Promise<PlannedTransfer[]> 
   } = splToken;
 
   const out: PlannedTransfer[] = [];
+  const failedToBuild: { asset: AssetDescriptor; error: string }[] = [];
+
   for (const asset of ctx.assets) {
     if (asset.kind === 'sol') {
       // SystemProgram.transfer doesn't need ATAs or token program.
@@ -580,12 +622,72 @@ async function buildTierTransfers(ctx: TierContext): Promise<PlannedTransfer[]> 
       continue;
     }
 
-    // SPL token / NFT transfer. Pick the program ID from the tag the
-    // wallet scan attached at parse time. Mistagging here means the
-    // ATA-create's mint-owner check inside the ATA program rejects
-    // with IncorrectProgramId — silently roping every other ix in the
-    // same tx into the rollback. Packing isolates groups to keep that
-    // failure scoped to its own tx; here we just pick correctly.
+    // ── NFT-format routing ────────────────────────────────────
+    // For isNft assets the wallet scan stamps nftFormat:
+    //   'spl'     → standard SPL Token / Token-2022 NFT
+    //   'cnft'    → Bubblegum compressed NFT
+    //   'core'    → MPL Core asset
+    //   'unknown' → DAS couldn't classify; we surface and skip
+    // Fungible (non-NFT) tokens fall through to the standard SPL
+    // transferChecked path below.
+    const nftFormat = asset.kind === 'nft' || asset.kind === 'token'
+      ? asset.account.nftFormat
+      : undefined;
+
+    if (asset.kind === 'nft' && nftFormat === 'unknown') {
+      failedToBuild.push({
+        asset: asset.descriptor,
+        error: 'Unknown NFT format. Asset surfaced by DAS but its `interface` could not be classified as SPL, cNFT, or Core.',
+      });
+      continue;
+    }
+
+    if (asset.kind === 'nft' && nftFormat === 'cnft') {
+      try {
+        const { buildCnftTransferIxs } = await import('./nftFormat');
+        const ixs = await buildCnftTransferIxs({
+          rpcUrl: ctx.dasRpcUrl,
+          assetId: asset.account.mint,
+          currentOwner: ctx.mainPubkey.toBase58(),
+          newOwner: ctx.destinationPubkey.toBase58(),
+        });
+        out.push({ ixs, asset: asset.descriptor, group: 'cnft' });
+      } catch (e) {
+        failedToBuild.push({
+          asset: asset.descriptor,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      continue;
+    }
+
+    if (asset.kind === 'nft' && nftFormat === 'core') {
+      try {
+        const { buildCoreTransferIxs } = await import('./nftFormat');
+        const ixs = await buildCoreTransferIxs({
+          rpcUrl: ctx.dasRpcUrl,
+          assetId: asset.account.mint,
+          currentOwner: ctx.mainPubkey.toBase58(),
+          newOwner: ctx.destinationPubkey.toBase58(),
+          payer: ctx.gasKeypair.publicKey.toBase58(),
+        });
+        out.push({ ixs, asset: asset.descriptor, group: 'core' });
+      } catch (e) {
+        failedToBuild.push({
+          asset: asset.descriptor,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      continue;
+    }
+
+    // ── SPL transfer (standard SPL/Token-2022 fungible OR SPL NFT) ──
+    // Pick the program ID from the tag the wallet scan attached at
+    // parse time. Mistagging here means the ATA-create's mint-owner
+    // check inside the ATA program rejects with IncorrectProgramId —
+    // silently roping every other ix in the same tx into the
+    // rollback. Packing isolates groups to keep that failure scoped
+    // to its own tx; here we just pick correctly.
     const mint = new PublicKey(asset.account.mint);
     const programId = asset.account.tokenProgram === 'token-2022'
       ? TOKEN_2022_PROGRAM_ID
@@ -611,12 +713,27 @@ async function buildTierTransfers(ctx: TierContext): Promise<PlannedTransfer[]> 
       [],
       programId,
     );
+    // Bucket SPL NFTs separately from SPL fungibles so a hostile
+    // fungible can't poison an NFT batch (and vice versa). Both
+    // still use TOKEN_PROGRAM_ID under the hood; the split is for
+    // fate isolation, not protocol correctness.
+    const isSplNft = asset.kind === 'nft';
+    const group: TransferGroup = asset.account.tokenProgram === 'token-2022'
+      ? 'token-2022'
+      : isSplNft
+        ? 'spl-nft'
+        : 'spl-token';
     out.push({
       ixs: [ataIx, transferIx],
       asset: asset.descriptor,
-      group: asset.account.tokenProgram === 'token-2022' ? 'token-2022' : 'spl',
+      group,
     });
   }
+
+  // Stash build-time failures on the context so processTier can surface
+  // them through the existing tx-failed pipeline alongside simulation
+  // failures.
+  ctx.buildFailures = failedToBuild;
 
   return out;
 }
@@ -662,18 +779,29 @@ async function packTransfersIntoTxs(
   ];
 
   // 1. Bucket by program-group. Order matters for predictable progress
-  //    rendering: system first (single SOL ix), then spl, then t22.
+  //    rendering: system first (single SOL ix), then fungibles by
+  //    program, then NFTs by format.
   const buckets: Record<TransferGroup, PlannedTransfer[]> = {
     system: [],
-    spl: [],
+    'spl-token': [],
     'token-2022': [],
+    'spl-nft': [],
+    cnft: [],
+    core: [],
   };
   for (const p of planned) buckets[p.group].push(p);
 
   // 2. Chunk each bucket independently. Same-group transfers share txs
   //    up to TRANSFERS_PER_TX; cross-group transfers never share.
   const packs: PackedTx[] = [];
-  const groupOrder: TransferGroup[] = ['system', 'spl', 'token-2022'];
+  const groupOrder: TransferGroup[] = [
+    'system',
+    'spl-token',
+    'token-2022',
+    'spl-nft',
+    'cnft',
+    'core',
+  ];
   for (const group of groupOrder) {
     const bucket = buckets[group];
     for (let i = 0; i < bucket.length; i += TRANSFERS_PER_TX) {
