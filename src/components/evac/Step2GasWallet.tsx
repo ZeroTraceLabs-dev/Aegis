@@ -1,12 +1,24 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Copy, Check, Loader2, AlertTriangle } from 'lucide-react';
-import { getGasWallet, setGasWallet, markGasReady } from '@/lib/evac/configStore';
+import { getGasWallet, setGasWallet, markGasReady, getPriority, defaultPriority } from '@/lib/evac/configStore';
 import { generateGasWallet, encryptGasWallet } from '@/lib/evac/keyManagement';
+import { estimateGas } from '@/lib/evac/gasEstimation';
+import {
+  subscribeSpamFilter,
+  isTokenSpam,
+  isNftCollectionSpam,
+} from '@/lib/spamFilterStore';
+import { getCollectionMap } from '@/lib/priceService';
+import type { WalletData } from '@/hooks/useWalletScan';
 
-const REQUIRED_SOL = 0.1;
+const BASE_REQUIRED_SOL = 0.1;
 const POLL_MS = 2000;
+
+interface Step2Props {
+  wallet: WalletData;
+}
 
 /**
  * Step 2 — Generate and fund the gas sub-wallet.
@@ -29,16 +41,51 @@ const POLL_MS = 2000;
  * the polling tick land before the flow moves on. (If you prefer
  * auto-advance, that's one line — but explicit confirm feels safer here.)
  */
-export function Step2GasWallet() {
+export function Step2GasWallet({ wallet: walletData }: Step2Props) {
   const { connection } = useConnection();
   const wallet = useWallet();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [balance, setBalance] = useState<number | null>(null);
+  const [, forceUpdate] = useState(0);
 
   const record = getGasWallet();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Re-render when spam list changes (affects gas estimate).
+  useEffect(() => {
+    const unsub = subscribeSpamFilter(() => forceUpdate((n) => n + 1));
+    return unsub;
+  }, []);
+
+  // Compute the required gas minimum from the user's wallet contents +
+  // the priority config they've already chosen, falling back to the
+  // default order if they haven't reached Step 4 yet. The precondition
+  // gate uses the GUARANTEED (Critical + Priority) tier estimate plus
+  // the 20% buffer baked into estimateGas.
+  const collectionMap = getCollectionMap();
+  const estimate = useMemo(() => {
+    const priorityConfig = getPriority() ?? defaultPriority();
+    return estimateGas(
+      walletData.solBalance,
+      walletData.tokenAccounts,
+      priorityConfig,
+      isTokenSpam,
+      (mint) => collectionMap[mint] ?? null,
+      isNftCollectionSpam,
+    );
+    // collectionMap reference is stable per-render but priceService
+    // mutations don't notify here — that's acceptable; collection
+    // assignment lags by one re-render at worst, immaterial for the
+    // estimate.
+  }, [walletData.solBalance, walletData.tokenAccounts, collectionMap]);
+
+  const requiredLamports = Math.max(
+    Math.floor(BASE_REQUIRED_SOL * 1e9),
+    estimate.guaranteedLamports,
+  );
+  const requiredSol = requiredLamports / 1e9;
 
   // Poll the gas wallet's SOL balance once a record exists.
   useEffect(() => {
@@ -150,8 +197,13 @@ export function Step2GasWallet() {
   }
 
   // ── Record exists — display + funding instructions ───────────
-  const funded = balance !== null && balance >= REQUIRED_SOL;
-  const underWarn = balance !== null && balance > 0 && balance < REQUIRED_SOL;
+  const funded = balance !== null && balance >= requiredSol;
+  const underWarn = balance !== null && balance > 0 && balance < requiredSol;
+  // If the user's wallet contents require more than 0.1 SOL of fuel to
+  // cover the Critical + Priority tiers (+ 20% buffer), surface a
+  // distinct line below the headline copy so they top up before
+  // continuing rather than getting blocked at the funded-continue step.
+  const contentsDriveMinimum = requiredLamports > Math.floor(BASE_REQUIRED_SOL * 1e9);
 
   return (
     <div className="space-y-4">
@@ -160,10 +212,19 @@ export function Step2GasWallet() {
           Fund the gas sub-wallet
         </p>
         <p className="text-[11px] text-muted-foreground leading-relaxed">
-          Send <span className="text-foreground font-medium">{REQUIRED_SOL} SOL</span>{' '}
+          Send <span className="text-foreground font-medium">{requiredSol.toFixed(4)} SOL</span>{' '}
           to the address below from your main wallet (or any source). Once
           the balance lands you can continue.
         </p>
+        {contentsDriveMinimum && (
+          <p className="text-[10px] text-muted-foreground mt-1.5 leading-relaxed">
+            Your wallet contents require at least{' '}
+            <span className="text-foreground font-medium">{requiredSol.toFixed(4)} SOL</span>{' '}
+            in the gas reserve to guarantee the Critical and Priority tiers
+            during evac (~{estimate.guaranteedTxCount} transactions × 105,000
+            lamports with a 20% buffer). Top up before continuing.
+          </p>
+        )}
       </div>
 
       <div className="border border-border rounded-md p-4 bg-background">
@@ -206,7 +267,7 @@ export function Step2GasWallet() {
         </div>
         <div className="flex items-center justify-between">
           <span className="text-[11px] text-muted-foreground">Required minimum</span>
-          <span className="text-[11px] font-mono text-foreground">{REQUIRED_SOL.toFixed(4)} SOL</span>
+          <span className="text-[11px] font-mono text-foreground">{requiredSol.toFixed(4)} SOL</span>
         </div>
         {underWarn && (
           <p className="text-[10px] text-muted-foreground mt-2">
@@ -230,7 +291,7 @@ export function Step2GasWallet() {
         onClick={() => markGasReady()}
         className="w-full px-4 py-2.5 rounded-md bg-primary text-primary-foreground text-[11px] font-semibold hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
       >
-        {funded ? 'Funded — continue' : `Waiting for ${REQUIRED_SOL} SOL…`}
+        {funded ? 'Funded — continue' : `Waiting for ${requiredSol.toFixed(4)} SOL…`}
       </button>
     </div>
   );

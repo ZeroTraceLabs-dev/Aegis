@@ -1,13 +1,47 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { DashboardContent, TABS } from '@/components/DashboardContent';
 import type { DashboardTab } from '@/components/DashboardContent';
 import { NotificationManager } from '@/components/NotificationManager';
 import { CerberusChat } from '@/components/CerberusChat';
 import { Bell } from 'lucide-react';
+import { FireButton } from '@/components/evac/FireButton';
+import {
+  initEvacConfigForWallet,
+  clearEvacConfig,
+  subscribeEvacConfig,
+  getEvacStep,
+} from '@/lib/evac/configStore';
+import { requestFireModal } from '@/lib/evac/fireControlStore';
 
 export default function Index() {
   const [activeTab, setActiveTab] = useState<DashboardTab>('wallet');
+  const { publicKey } = useWallet();
+  const [armed, setArmed] = useState<boolean>(false);
+
+  // Track armed state at the page level so the navbar fire button can
+  // mount/unmount with it. ConfigStore is also init'd by EvacSetupFlow
+  // when the Evacuation tab is visible, but that path doesn't fire if
+  // the user hasn't yet opened the tab on this session.
+  useEffect(() => {
+    if (publicKey) initEvacConfigForWallet(publicKey.toBase58());
+    else clearEvacConfig();
+    setArmed(getEvacStep() === 'armed');
+  }, [publicKey]);
+
+  useEffect(() => {
+    const unsub = subscribeEvacConfig(() => {
+      setArmed(getEvacStep() === 'armed');
+    });
+    return unsub;
+  }, []);
+
+  const handleNavbarFire = () => {
+    setActiveTab('emergency');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    requestFireModal();
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -23,6 +57,9 @@ export default function Index() {
             <NotificationInline />
           </div>
           <div className="flex items-center gap-3">
+            {armed && (
+              <FireButton placement="navbar" onClick={handleNavbarFire} />
+            )}
             <a
               href="https://discord.gg/9NaPPj7KMk"
               target="_blank"
@@ -46,6 +83,9 @@ export default function Index() {
               <span className="plaque-kicker text-muted-foreground text-[0.625rem] mt-0.5">WATCH ⋅ ALERT ⋅ EVADE</span>
             </div>
             <div className="flex items-center gap-2">
+              {armed && (
+                <FireButton placement="navbar" onClick={handleNavbarFire} />
+              )}
               <a
                 href="https://discord.gg/9NaPPj7KMk"
                 target="_blank"

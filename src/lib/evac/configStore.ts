@@ -196,6 +196,25 @@ export function disarmEvac() {
   notify();
 }
 
+/**
+ * Partial wipe used by the fire-success "Re-arm" path. Clears only the
+ * gas sub-wallet record + readiness flag (the gas was just spent on
+ * fire and the keypair was zeroed in memory). Destination, priority
+ * order, and the published ALT remain intact so the user can re-fund
+ * a fresh gas wallet and arm again without redoing the full setup.
+ *
+ * Threat-model acknowledgment also persists — the user has already
+ * read it once for this wallet; making them re-read on every re-arm
+ * is friction without safety value.
+ */
+export function clearGasForRearm() {
+  if (!currentWallet) return;
+  localStorage.removeItem(KEY_GAS(currentWallet));
+  localStorage.removeItem(KEY_GAS_READY(currentWallet));
+  state = { ...state, gasWallet: null, gasReady: false };
+  notify();
+}
+
 // ── Default priority ───────────────────────────────────────────
 
 /** Sensible default ordering — SOL critical (drains first), tokens next, NFTs last. */

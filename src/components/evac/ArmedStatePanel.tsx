@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo, useReducer } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import {
   ShieldCheck,
@@ -13,12 +13,39 @@ import {
   getPriority,
   getAlt,
   disarmEvac,
+  clearGasForRearm,
   type PriorityTier,
   type AssetCategory,
 } from '@/lib/evac/configStore';
 import { verifyALT } from '@/lib/evac/altManagement';
 import { decryptGasWalletSecret } from '@/lib/evac/keyManagement';
 import { planSweep, executeSweep, type SweepPlan, type SweepResult } from '@/lib/evac/sweep';
+import { executeEvac, FireSignatureRejectedError, type FireResult, type FireProgressEvent } from '@/lib/evac/fire';
+import { estimateGas, assessGas, PER_TX_LAMPORTS, TRANSFERS_PER_TX, type GasEstimate } from '@/lib/evac/gasEstimation';
+import type { PriorityConfig } from '@/lib/evac/configStore';
+import {
+  subscribeFireControl,
+  getFireControlState,
+  isHotTriggerActive,
+  deactivateHotTrigger,
+} from '@/lib/evac/fireControlStore';
+import {
+  subscribeSpamFilter,
+  isTokenSpam,
+  isNftCollectionSpam,
+} from '@/lib/spamFilterStore';
+import { getCollectionMap } from '@/lib/priceService';
+import type { WalletData } from '@/hooks/useWalletScan';
+import type { TokenMeta } from '@/hooks/useAssetMetadata';
+import { FireButton } from './FireButton';
+import { HotTriggerToggle } from './HotTriggerToggle';
+import { FireConfirmationModal } from './FireConfirmationModal';
+import {
+  FireProgressPanel,
+  applyFireProgress,
+  INITIAL_FIRE_PROGRESS,
+} from './FireProgressPanel';
+import { FireSuccessPanel } from './FireSuccessPanel';
 
 const HEALTH_POLL_MS = 30_000;
 const GAS_WARN_THRESHOLD = 0.05;
@@ -81,7 +108,14 @@ const INITIAL_DISARM: DisarmState = {
   error: null,
 };
 
-export function ArmedStatePanel() {
+interface ArmedStatePanelProps {
+  wallet: WalletData;
+  metadata: Map<string, TokenMeta>;
+}
+
+type FirePhase = 'idle' | 'confirming' | 'running' | 'done';
+
+export function ArmedStatePanel({ wallet: walletData, metadata }: ArmedStatePanelProps) {
   const { connection } = useConnection();
   const walletAdapter = useWallet();
   const gasWallet = getGasWallet();
@@ -101,6 +135,57 @@ export function ArmedStatePanel() {
   const [disarm, setDisarm] = useState<DisarmState>(INITIAL_DISARM);
   const [sigCopied, setSigCopied] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Fire state machine ────────────────────────────────────────
+  const [firePhase, setFirePhase] = useState<FirePhase>('idle');
+  const [fireProgress, dispatchProgress] = useReducer(applyFireProgress, INITIAL_FIRE_PROGRESS);
+  const [fireResult, setFireResult] = useState<FireResult | null>(null);
+  const [fireError, setFireError] = useState<string | null>(null);
+  const [, forceUpdate] = useState(0);
+
+  // Spam-store subscription so estimates refresh when the user
+  // marks/unmarks items mid-armed.
+  useEffect(() => {
+    const unsub = subscribeSpamFilter(() => forceUpdate((n) => n + 1));
+    return unsub;
+  }, []);
+
+  // Fire-control subscription so the navbar fire button can request
+  // the modal from outside this component tree.
+  const lastSeenSeqRef = useRef<number>(getFireControlState().modalRequestSeq);
+  useEffect(() => {
+    const unsub = subscribeFireControl(() => {
+      const seq = getFireControlState().modalRequestSeq;
+      if (seq !== lastSeenSeqRef.current) {
+        lastSeenSeqRef.current = seq;
+        if (firePhase === 'idle') setFirePhase('confirming');
+      }
+      // Bump re-render so hot-trigger label changes propagate.
+      forceUpdate((n) => n + 1);
+    });
+    return unsub;
+  }, [firePhase]);
+
+  // ── Gas sufficiency estimate (live) ──────────────────────────
+  const collectionMap = getCollectionMap();
+  const gasEstimate = useMemo(() => {
+    if (!priority) return null;
+    return estimateGas(
+      walletData.solBalance,
+      walletData.tokenAccounts,
+      priority,
+      isTokenSpam,
+      (mint) => collectionMap[mint] ?? null,
+      isNftCollectionSpam,
+    );
+    // `collectionMap` is a fresh ref each render; pricing service
+    // notifications drive parent re-renders, which is enough.
+  }, [walletData.solBalance, walletData.tokenAccounts, priority, collectionMap]);
+
+  const gasStatus = useMemo(() => {
+    if (!gasEstimate || health.gasBalance === null) return null;
+    return assessGas(Math.floor(health.gasBalance * 1e9), gasEstimate);
+  }, [gasEstimate, health.gasBalance]);
 
   const runHealthCheck = useCallback(async () => {
     if (!gasWallet || !alt) return;
@@ -268,6 +353,134 @@ export function ArmedStatePanel() {
     });
   }, [disarm.result]);
 
+  // ── Fire handlers ─────────────────────────────────────────────
+
+  const startFire = useCallback(async () => {
+    if (!gasWallet || !destination || !priority || !alt) return;
+    if (!walletAdapter.publicKey) {
+      setFireError('Main wallet disconnected.');
+      setFirePhase('done');
+      return;
+    }
+    setFireError(null);
+    setFireResult(null);
+    dispatchProgress({ type: 'tier-start', tier: 'critical', plannedTransfers: 0, plannedTxs: 0 });
+    setFirePhase('running');
+
+    let decrypted: Uint8Array | null = null;
+    try {
+      decrypted = await decryptGasWalletSecret(walletAdapter, gasWallet);
+      const web3 = await import('@solana/web3.js');
+      const { Keypair } = web3;
+      const gasKeypair = Keypair.fromSecretKey(decrypted);
+
+      const spamTokenMints = new Set(
+        walletData.tokenAccounts.filter((t) => isTokenSpam(t.mint)).map((t) => t.mint),
+      );
+      const collMap = getCollectionMap();
+      const spamCollectionIds = new Set(
+        Object.values(collMap).filter((cid) => isNftCollectionSpam(cid)),
+      );
+
+      const result = await executeEvac({
+        connection,
+        walletAdapter,
+        gasKeypair,
+        destinationAddress: destination,
+        walletData,
+        collectionMap: collMap,
+        spamTokenMints,
+        spamCollectionIds,
+        priority,
+        altAddress: alt,
+        metadataByMint: new Map(
+          Array.from(metadata.entries()).map(([k, v]) => [
+            k,
+            { symbol: v.symbol, name: v.name },
+          ]),
+        ),
+        onProgress: (ev: FireProgressEvent) => dispatchProgress(ev),
+      });
+
+      // Zero the decrypted key immediately after fire completes.
+      decrypted.fill(0);
+      decrypted = null;
+
+      setFireResult(result);
+      setFirePhase('done');
+      deactivateHotTrigger();
+    } catch (e) {
+      if (decrypted) {
+        decrypted.fill(0);
+        decrypted = null;
+      }
+      const msg = e instanceof Error ? e.message : String(e);
+      if (e instanceof FireSignatureRejectedError) {
+        setFireError(`Signature rejected. Evacuation halted at ${e.tier}. Remaining tiers not attempted.`);
+      } else {
+        setFireError(msg);
+      }
+      // If fire produced partial progress, still show the done view so
+      // the user can see what landed.
+      setFireResult((prev) => prev ?? assembleEmptyResult());
+      setFirePhase('done');
+      deactivateHotTrigger();
+    }
+  }, [
+    gasWallet,
+    destination,
+    priority,
+    alt,
+    walletAdapter,
+    connection,
+    walletData,
+    metadata,
+  ]);
+
+  const handleTabFireClick = useCallback(() => {
+    if (firePhase !== 'idle') return;
+    if (isHotTriggerActive()) {
+      // Hot path — bypass modal.
+      startFire();
+    } else {
+      setFirePhase('confirming');
+    }
+  }, [firePhase, startFire]);
+
+  const handleConfirmFire = useCallback(() => {
+    setFirePhase('idle');
+    // Brief tick before transitioning so the modal can unmount cleanly.
+    setTimeout(() => startFire(), 0);
+  }, [startFire]);
+
+  const handleCancelFire = useCallback(() => {
+    setFirePhase('idle');
+  }, []);
+
+  const handleFireDone = useCallback(() => {
+    // Full disarm — clears all four pieces. Component unmounts as the
+    // armed state vanishes.
+    disarmEvac();
+  }, []);
+
+  const handleFireRetry = useCallback(() => {
+    // Retry path: keep configuration, re-plan against current wallet
+    // state. The user typically retries after partial failures, so the
+    // wallet contents are now different (some assets already moved).
+    setFireResult(null);
+    setFireError(null);
+    dispatchProgress({ type: 'tier-start', tier: 'critical', plannedTransfers: 0, plannedTxs: 0 });
+    setFirePhase('idle');
+    setTimeout(() => startFire(), 0);
+  }, [startFire]);
+
+  const handleRearm = useCallback(() => {
+    // Partial wipe: gas+threat cleared, destination/priority/ALT kept.
+    // Component unmounts as gasWallet/gasReady go null and EvacSetupFlow
+    // swaps back to Step 2.
+    clearGasForRearm();
+  }, []);
+
   if (!gasWallet || !destination || !priority || !alt) {
     return (
       <p className="text-[11px] text-muted-foreground">
@@ -280,8 +493,56 @@ export function ArmedStatePanel() {
   const altDown = health.altExists === false;
   const degraded = gasLow || altDown;
 
+  // ── Fire-phase swap: hide normal display while running / done ──
+
+  if (firePhase === 'running') {
+    return <FireProgressPanel state={fireProgress} />;
+  }
+
+  if (firePhase === 'done' && fireResult) {
+    const totalFailed = fireResult.tiers.critical.failed.length
+      + fireResult.tiers.priority.failed.length
+      + fireResult.tiers.standard.failed.length;
+    const totalSkipped = fireResult.tiers.critical.skipped.length
+      + fireResult.tiers.priority.skipped.length
+      + fireResult.tiers.standard.skipped.length;
+    const incomplete = !!fireError || totalFailed > 0 || totalSkipped > 0;
+    return (
+      <>
+        {fireError && (
+          <div className="mb-4 flex items-start gap-2 p-3 border border-destructive/40 bg-destructive/10 rounded-md">
+            <AlertTriangle size={14} className="text-destructive shrink-0 mt-0.5" />
+            <p className="text-[11px] text-destructive">{fireError}</p>
+          </div>
+        )}
+        <FireSuccessPanel
+          result={fireResult}
+          incomplete={incomplete}
+          onDone={handleFireDone}
+          onRetryFailed={handleFireRetry}
+          onRearm={handleRearm}
+        />
+      </>
+    );
+  }
+
+  // ── Confirmation modal ───────────────────────────────────────
+  const fireModal = gasEstimate && firePhase === 'confirming' ? (
+    <FireConfirmationModal
+      open
+      destinationAddress={destination}
+      estimate={gasEstimate}
+      standardBestEffort={gasStatus?.kind !== 'sufficient-full'}
+      estimatedDurationSec={Math.max(8, gasEstimate.fullTxCount * 3)}
+      estimatedSignaturePrompts={countSignaturePrompts(priority)}
+      onCancel={handleCancelFire}
+      onConfirm={handleConfirmFire}
+    />
+  ) : null;
+
   return (
     <div className="space-y-4">
+      {fireModal}
       {/* Status banner */}
       {degraded ? (
         <div className="flex items-start gap-2 p-3 border border-destructive/40 bg-destructive/10 rounded-md">
@@ -315,6 +576,24 @@ export function ArmedStatePanel() {
             </p>
           </div>
         </div>
+      )}
+
+      {/* Fire button + Hot trigger */}
+      <div className="space-y-3">
+        <FireButton
+          placement="tab"
+          onClick={handleTabFireClick}
+          disabled={firePhase !== 'idle'}
+        />
+        <HotTriggerToggle />
+      </div>
+
+      {/* Gas sufficiency */}
+      {gasEstimate && (
+        <GasSufficiencySection
+          gasEstimate={gasEstimate}
+          gasReserveLamports={health.gasBalance === null ? null : Math.floor(health.gasBalance * 1e9)}
+        />
       )}
 
       {/* Destination */}
@@ -616,4 +895,113 @@ function secondsAgo(ts: number): string {
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
   return `${m}m ago`;
+}
+
+function assembleEmptyResult(): FireResult {
+  return {
+    tiers: {
+      critical: { succeeded: [], failed: [], skipped: [] },
+      priority: { succeeded: [], failed: [], skipped: [] },
+      standard: { succeeded: [], failed: [], skipped: [] },
+    },
+    totalAssetsEvacuated: { sol: 0, tokens: 0, nfts: 0 },
+    totalGasSpent: 0,
+    durationMs: 0,
+  };
+}
+
+/** Each tier whose categories have at least one asset contributes one
+ *  signature prompt (signAllTransactions batches all of that tier's
+ *  txs into a single wallet popup). */
+function countSignaturePrompts(priority: PriorityConfig): number {
+  let n = 0;
+  for (const tier of ['critical', 'priority', 'standard'] as PriorityTier[]) {
+    if (priority.tiers[tier].length > 0) n += 1;
+  }
+  return n;
+}
+
+function GasSufficiencySection({
+  gasEstimate,
+  gasReserveLamports,
+}: {
+  gasEstimate: GasEstimate;
+  gasReserveLamports: number | null;
+}) {
+  const status = gasReserveLamports === null
+    ? null
+    : assessGas(gasReserveLamports, gasEstimate);
+  const guaranteedSol = gasEstimate.guaranteedLamports / 1e9;
+  const fullSol = gasEstimate.fullLamports / 1e9;
+  const reserveSol = gasReserveLamports === null
+    ? null
+    : gasReserveLamports / 1e9;
+
+  let label: string;
+  let intent: 'ok' | 'warn' | 'err';
+  if (!status || status.kind === 'sufficient-full') {
+    label = 'Sufficient for full evac (Critical + Priority + Standard)';
+    intent = 'ok';
+  } else if (status.kind === 'sufficient-guaranteed') {
+    label = 'Sufficient for Critical + Priority. Standard is best-effort.';
+    intent = 'warn';
+  } else {
+    label = `Insufficient — top up to ${(gasEstimate.guaranteedLamports / 1e9).toFixed(4)} SOL`;
+    intent = 'err';
+  }
+
+  return (
+    <div
+      className={`border rounded-md p-3 bg-background ${
+        intent === 'err'
+          ? 'border-destructive/40'
+          : intent === 'warn'
+            ? 'border-muted-foreground/30'
+            : 'border-border'
+      }`}
+    >
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">
+        Gas sufficiency
+      </p>
+      <div className="space-y-1 text-[11px]">
+        <div className="flex items-center justify-between">
+          <span className="text-muted-foreground">
+            Guaranteed (Critical + Priority)
+          </span>
+          <span className="font-mono text-foreground">
+            {guaranteedSol.toFixed(4)} SOL
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-muted-foreground">
+            Full evac (incl. Standard)
+          </span>
+          <span className="font-mono text-foreground">
+            {fullSol.toFixed(4)} SOL
+          </span>
+        </div>
+        <div className="flex items-center justify-between border-t border-border pt-1.5 mt-1.5">
+          <span className="text-foreground font-semibold">Current reserve</span>
+          <span className="font-mono text-foreground font-semibold">
+            {reserveSol === null ? '— SOL' : `${reserveSol.toFixed(4)} SOL`}
+          </span>
+        </div>
+      </div>
+      <p
+        className={`mt-2 text-[10px] ${
+          intent === 'err'
+            ? 'text-destructive'
+            : intent === 'warn'
+              ? 'text-muted-foreground'
+              : 'text-foreground/80'
+        }`}
+      >
+        {label}
+      </p>
+      {/* TRANSFERS_PER_TX is referenced in the explain footer below */}
+      <p className="mt-1 text-[9px] text-muted-foreground/70">
+        Estimate uses {TRANSFERS_PER_TX} transfers/tx · {(PER_TX_LAMPORTS / 1e3).toFixed(0)}K lamports/tx · 20% buffer.
+      </p>
+    </div>
+  );
 }

@@ -71,11 +71,13 @@ export function EvacSetupFlow({ wallet, metadata }: EvacSetupFlowProps) {
 
       <div className="mt-4">
         {currentStep === 1 && <Step1ThreatModel />}
-        {currentStep === 2 && <Step2GasWallet />}
+        {currentStep === 2 && <Step2GasWallet wallet={wallet} />}
         {currentStep === 3 && <Step3Destination />}
         {currentStep === 4 && <Step4Priorities wallet={wallet} metadata={metadata} />}
         {currentStep === 5 && <Step5ALTPublish wallet={wallet} />}
-        {currentStep === 'armed' && <ArmedStatePanel />}
+        {currentStep === 'armed' && (
+          <ArmedStatePanel wallet={wallet} metadata={metadata} />
+        )}
       </div>
     </div>
   );
