@@ -29,6 +29,10 @@ export interface TokenMeta {
  */
 export type DasNftFormat = 'spl' | 'cnft' | 'core' | 'unknown';
 
+/** Same shape as TokenProgramTag in useWalletScan; duplicated here to
+ *  keep the hooks decoupled. Only meaningful when format='spl'. */
+export type DasTokenProgramTag = 'spl' | 'token-2022';
+
 /** An NFT discovered by DAS that may not be in the SPL token list */
 export interface DasNft {
   mint: string;
@@ -37,10 +41,98 @@ export interface DasNft {
   image: string;
   compressed: boolean;
   collection?: string;
-  /** Definitive format classification from the DAS `interface` and
-   *  `compression.compressed` fields. 'unknown' means DAS surfaced an
-   *  asset we can't safely transfer — the fire path excludes it. */
+  /** Definitive format classification. Initially seeded from DAS's
+   *  `interface` field, then overridden by an on-chain owner-program
+   *  check (TIER 1.2 below) when the two disagree. 'unknown' means we
+   *  can't safely transfer the asset — fire path excludes it. */
   format: DasNftFormat;
+  /** When format='spl', whether the mint is owned by SPL Token Program
+   *  or Token-2022 Program. Irrelevant for cNFT and Core. */
+  tokenProgram: DasTokenProgramTag;
+}
+
+// ── Canonical program IDs used by the owner-program check ────────
+// Hardcoded as base58 strings so this module doesn't import @solana/web3.js
+// or @metaplex-foundation/mpl-core at the top level (kept off the hot path).
+const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+// Verified against node_modules/@metaplex-foundation/mpl-core's MPL_CORE_PROGRAM_ID.
+const MPL_CORE_PROGRAM_ID = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
+
+interface OwnerClassification {
+  format: DasNftFormat;
+  tokenProgram: DasTokenProgramTag;
+}
+
+/**
+ * Map an on-chain mint-account owner program to the format + token
+ * program our fire path needs. This is ground truth — it overrides
+ * whatever DAS reported in its `interface` field, because DAS has
+ * been observed to mislabel MPL Core assets as V1_NFT.
+ *
+ * The compressed flag from DAS is consulted ONLY when the mint
+ * account doesn't exist on-chain (Bubblegum doesn't create individual
+ * mint accounts — the leaf hash lives in a Merkle tree). If DAS said
+ * compressed=true and the mint is missing, it's a cNFT; otherwise we
+ * can't classify it and surface 'unknown'.
+ */
+function classifyByOwner(
+  owner: string | null,
+  dasCompressed: boolean,
+): OwnerClassification {
+  if (owner === TOKEN_PROGRAM_ID) return { format: 'spl', tokenProgram: 'spl' };
+  if (owner === TOKEN_2022_PROGRAM_ID) return { format: 'spl', tokenProgram: 'token-2022' };
+  if (owner === MPL_CORE_PROGRAM_ID) return { format: 'core', tokenProgram: 'spl' };
+  if (owner === null) {
+    return { format: dasCompressed ? 'cnft' : 'unknown', tokenProgram: 'spl' };
+  }
+  return { format: 'unknown', tokenProgram: 'spl' };
+}
+
+/**
+ * Batch-fetch the on-chain owner program for each mint via
+ * getMultipleAccounts (up to 100 per RPC call). Returns a Map keyed
+ * by mint address; the value is the owner program ID, or null if the
+ * account doesn't exist on-chain (expected for cNFTs), or absent
+ * from the Map entirely if the batch errored (caller treats that as
+ * "fall back to DAS classification").
+ */
+async function fetchMintOwners(
+  rpcUrl: string,
+  mints: string[],
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  const BATCH = 100;
+  for (let i = 0; i < mints.length; i += BATCH) {
+    const batch = mints.slice(i, i + BATCH);
+    try {
+      const r = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'owner-check',
+          method: 'getMultipleAccounts',
+          params: [batch, { commitment: 'confirmed', encoding: 'base64' }],
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!r.ok) {
+        console.warn(`[Meta] owner-check HTTP ${r.status} on batch ${i}`);
+        continue;
+      }
+      const json = await r.json();
+      const values: Array<{ owner: string } | null> = json?.result?.value || [];
+      for (let j = 0; j < batch.length; j++) {
+        const value = values[j];
+        out.set(batch[j], value ? value.owner : null);
+      }
+    } catch (e) {
+      console.warn(`[Meta] owner-check batch ${i} failed:`, e);
+      // Don't set entries — caller treats absence as "keep DAS classification"
+    }
+  }
+  return out;
 }
 
 /**
@@ -221,6 +313,9 @@ export function useTokenMetadata(
                   compressed: !!item.compression?.compressed,
                   collection: collGroup?.group_value || undefined,
                   format,
+                  // Seeded from DAS; potentially overridden by TIER 1.2
+                  // owner-program check below.
+                  tokenProgram: 'spl',
                 });
               }
 
@@ -259,6 +354,43 @@ export function useTokenMetadata(
                 if (resolved > 0) {
                   console.log(`[Meta] json_uri batch resolved ${resolved} images`);
                 }
+              }
+            }
+
+            // ═══════════════════════════════════════════════════════════
+            // TIER 1.2: On-chain owner-program verification (ground truth)
+            // ═══════════════════════════════════════════════════════════
+            // DAS has been observed to mislabel MPL Core assets as V1_NFT
+            // (e.g. Misfit collection on the bait wallet). Trusting DAS
+            // alone routes those through the SPL transfer path, where
+            // ATA-create rejects the mint with IncorrectProgramId because
+            // the mint isn't owned by SPL Token Program.
+            //
+            // Fix: batch-fetch the mint accounts and classify each by its
+            // actual on-chain owner program. Override the DAS-derived
+            // format whenever the two disagree. DAS's compressed flag is
+            // still consulted for cNFTs (mints absent from chain).
+            if (_dasNftCache.length > 0) {
+              const nftMints = _dasNftCache.map((n) => n.mint);
+              console.log(`[Meta] T1.2: Owner-program check for ${nftMints.length} NFTs`);
+              const owners = await fetchMintOwners(RPC_ENDPOINT, nftMints);
+              let overrides = 0;
+              for (const entry of _dasNftCache) {
+                if (!owners.has(entry.mint)) continue; // batch errored — keep DAS classification
+                const owner = owners.get(entry.mint) ?? null;
+                const cls = classifyByOwner(owner, entry.compressed);
+                if (cls.format !== entry.format) {
+                  console.log(
+                    `[Meta] Owner-program override for ${entry.mint}: ` +
+                      `DAS said '${entry.format}', on-chain owner ${owner ?? 'null'} → '${cls.format}'`,
+                  );
+                  entry.format = cls.format;
+                  overrides++;
+                }
+                entry.tokenProgram = cls.tokenProgram;
+              }
+              if (overrides > 0) {
+                console.log(`[Meta] T1.2 applied ${overrides} format override(s)`);
               }
             }
           } catch (e) {

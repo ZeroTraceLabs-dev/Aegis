@@ -151,12 +151,14 @@ export function DashboardContent({ activeTab = 'wallet' }: DashboardContentProps
         uiAmount: 1,
         decimals: 0,
         isNft: true,
-        // The DAS-only path covers cNFTs (Bubblegum) and MPL Core
-        // assets, neither of which lives in an SPL token account, so
-        // tokenProgram is irrelevant for them. We still set 'spl' for
-        // schema compatibility — the fire engine routes by nftFormat,
-        // not tokenProgram, for any isNft asset.
-        tokenProgram: 'spl',
+        // Both fields now come from useAssetMetadata's TIER 1.2
+        // owner-program ground-truth check, not the DAS interface
+        // field. Critical: DAS has mislabeled MPL Core assets as
+        // V1_NFT (Misfit on the bait wallet); without this, those
+        // assets routed through the SPL path and failed at ATA-create
+        // with IncorrectProgramId. For cNFT/Core the tokenProgram is
+        // irrelevant — the fire engine routes by nftFormat.
+        tokenProgram: nft.tokenProgram,
         nftFormat: nft.format,
       });
     }
