@@ -15,7 +15,10 @@ const App = () => {
   return (
     <ConnectionProvider
       endpoint={RPC_ENDPOINT}
-      config={{ disableRetryOnRateLimit: true }}
+      config={{
+        commitment: 'confirmed',
+        disableRetryOnRateLimit: true,
+      }}
     >
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>

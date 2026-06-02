@@ -49,7 +49,10 @@ export function Step2GasWallet() {
       try {
         const web3 = await import('@solana/web3.js');
         const { PublicKey } = web3;
-        const lamports = await connection.getBalance(new PublicKey(record.pubkey));
+        // 'confirmed' commitment so the 2s poll actually surfaces incoming
+        // funds within ~2s — at the default 'finalized' level the user
+        // would wait an extra 15-30s after their send before the UI moves.
+        const lamports = await connection.getBalance(new PublicKey(record.pubkey), 'confirmed');
         if (!cancelled) setBalance(lamports / 1e9);
       } catch {
         /* network failure — keep last good reading */
