@@ -32,6 +32,15 @@ function resolveToken(mint: string) {
   };
 }
 
+/**
+ * Discriminator for which SPL program owns this token account. Carried
+ * through from the originating getParsedTokenAccountsByOwner call so
+ * downstream consumers (notably the evac fire path) can pick the right
+ * program ID when constructing transfer instructions. Mismatching this
+ * causes the ATA program to reject the transfer with IncorrectProgramId.
+ */
+export type TokenProgramTag = 'spl' | 'token-2022';
+
 export interface TokenAccount {
   mint: string;
   symbol: string;
@@ -42,6 +51,7 @@ export interface TokenAccount {
   delegate?: string;
   delegatedAmount?: number;
   isNft: boolean;
+  tokenProgram: TokenProgramTag;
 }
 
 export interface DelegateApproval {
@@ -139,7 +149,7 @@ export function useWalletData(): WalletData {
       }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      function parseAccounts(accounts: any[]) {
+      function parseAccounts(accounts: any[], tokenProgram: TokenProgramTag) {
         const tokens: TokenAccount[] = [];
         const delegates: DelegateApproval[] = [];
         let empty = 0;
@@ -163,6 +173,7 @@ export function useWalletData(): WalletData {
               ? parseFloat(info.delegatedAmount.amount) / Math.pow(10, decimals)
               : undefined,
             isNft,
+            tokenProgram,
           });
 
           if (info.delegate && info.delegatedAmount) {
@@ -190,7 +201,7 @@ export function useWalletData(): WalletData {
           { value: [] }, 'SPL',
         );
         if (abortRef.current) return;
-        const spl = parseAccounts(splRes.value);
+        const spl = parseAccounts(splRes.value, 'spl');
         setTokenAccounts(spl.tokens);
         setDelegateApprovals(spl.delegates);
         setEmptyAccounts(spl.empty);
@@ -203,7 +214,7 @@ export function useWalletData(): WalletData {
           { value: [] }, 'Token-2022',
         );
         if (abortRef.current) return;
-        const t22 = parseAccounts(t22Res.value);
+        const t22 = parseAccounts(t22Res.value, 'token-2022');
         setTokenAccounts((prev) => [...prev, ...t22.tokens]);
         setDelegateApprovals((prev) => [...prev, ...t22.delegates]);
         setEmptyAccounts((prev) => prev + t22.empty);

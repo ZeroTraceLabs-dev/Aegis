@@ -151,6 +151,12 @@ export function DashboardContent({ activeTab = 'wallet' }: DashboardContentProps
         uiAmount: 1,
         decimals: 0,
         isNft: true,
+        // DAS doesn't tell us the underlying token program for an NFT
+        // and the on-chain scan didn't surface it, so we tag 'spl' as
+        // the most likely case (Metaplex NFTs are standard SPL Token).
+        // Mistagged Token-2022 NFTs will fail their own fire-path tx
+        // in isolation — acceptable until DAS metadata wires up.
+        tokenProgram: 'spl',
       });
     }
 

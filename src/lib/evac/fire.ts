@@ -537,11 +537,17 @@ async function processTier(ctx: TierContext): Promise<TierResult> {
 
 // ── Instruction building ────────────────────────────────────────
 
+/** Which on-chain program a planned transfer's ixs invoke. Drives
+ *  fate-isolation in packing: txs never mix groups, so a failure in
+ *  one group's ix can't atomic-rollback transfers in another. */
+type TransferGroup = 'system' | 'spl' | 'token-2022';
+
 interface PlannedTransfer {
   /** Instructions for this single asset (SystemProgram.transfer for
    *  SOL; createIdempotent + transferChecked for SPL/NFTs). */
   ixs: TransactionInstruction[];
   asset: AssetDescriptor;
+  group: TransferGroup;
 }
 
 async function buildTierTransfers(ctx: TierContext): Promise<PlannedTransfer[]> {
@@ -550,6 +556,7 @@ async function buildTierTransfers(ctx: TierContext): Promise<PlannedTransfer[]> 
   const splToken = await import('@solana/spl-token');
   const {
     TOKEN_PROGRAM_ID,
+    TOKEN_2022_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
     createTransferCheckedInstruction,
     createAssociatedTokenAccountIdempotentInstruction,
@@ -569,17 +576,20 @@ async function buildTierTransfers(ctx: TierContext): Promise<PlannedTransfer[]> 
         toPubkey: ctx.destinationPubkey,
         lamports,
       });
-      out.push({ ixs: [ix], asset: asset.descriptor });
+      out.push({ ixs: [ix], asset: asset.descriptor, group: 'system' });
       continue;
     }
 
-    // SPL token / NFT transfer.
+    // SPL token / NFT transfer. Pick the program ID from the tag the
+    // wallet scan attached at parse time. Mistagging here means the
+    // ATA-create's mint-owner check inside the ATA program rejects
+    // with IncorrectProgramId — silently roping every other ix in the
+    // same tx into the rollback. Packing isolates groups to keep that
+    // failure scoped to its own tx; here we just pick correctly.
     const mint = new PublicKey(asset.account.mint);
-    // Detect Token-2022 vs SPL Token by attempting Token-2022 owner
-    // would require an extra RPC. Pragmatic shortcut: prefer SPL
-    // Token. Token-2022 mints in user wallets are rare; the failure
-    // mode (simulation error) safely skips the bad tx.
-    const programId = TOKEN_PROGRAM_ID;
+    const programId = asset.account.tokenProgram === 'token-2022'
+      ? TOKEN_2022_PROGRAM_ID
+      : TOKEN_PROGRAM_ID;
     const sourceAta = getAssociatedTokenAddressSync(mint, ctx.mainPubkey, false, programId);
     const destAta = getAssociatedTokenAddressSync(mint, ctx.destinationPubkey, false, programId);
     const ataIx = createAssociatedTokenAccountIdempotentInstruction(
@@ -601,7 +611,11 @@ async function buildTierTransfers(ctx: TierContext): Promise<PlannedTransfer[]> 
       [],
       programId,
     );
-    out.push({ ixs: [ataIx, transferIx], asset: asset.descriptor });
+    out.push({
+      ixs: [ataIx, transferIx],
+      asset: asset.descriptor,
+      group: asset.account.tokenProgram === 'token-2022' ? 'token-2022' : 'spl',
+    });
   }
 
   return out;
@@ -619,11 +633,20 @@ interface PackedTx {
  * compute-budget ixs (price + limit) so the priority fee is exactly
  * the fixed value defined in gasEstimation.ts.
  *
- * Packing is static at TRANSFERS_PER_TX (10) — chosen to stay safely
- * inside the 1232-byte tx size limit when ATAs ride uncompressed
- * alongside ALT-referenced mints. Dynamic packing tuned to byte budget
- * would squeeze a few more transfers per tx but adds simulation
- * complexity and reduces predictability of the gas estimate.
+ * Packing is grouped by program ID first, then chunked at
+ * TRANSFERS_PER_TX (10) within each group. Solana transactions are
+ * atomic — one ix failure rolls back every ix in the same tx — so
+ * mixing program IDs in one tx means a hostile Token-2022 mint can
+ * kill an otherwise-clean Token Program transfer. By emitting
+ * separate txs per group, a failed mint takes only its same-group
+ * batch down with it; the other groups continue to evacuate.
+ *
+ * Cost: in a mixed-program wallet, we pay one extra tx per program
+ * group present (max two extra: Token-2022 + System). The 20% gas
+ * buffer absorbs this; the precondition's worst-case is ~3 txs of
+ * overhead vs the naive sum. Static chunk at 10 transfers/tx also
+ * stays safely inside the 1232-byte tx size limit when ATAs ride
+ * uncompressed alongside ALT-referenced mints.
  */
 async function packTransfersIntoTxs(
   planned: PlannedTransfer[],
@@ -637,13 +660,29 @@ async function packTransfersIntoTxs(
       microLamports: COMPUTE_UNIT_PRICE_MICRO_LAMPORTS,
     }),
   ];
+
+  // 1. Bucket by program-group. Order matters for predictable progress
+  //    rendering: system first (single SOL ix), then spl, then t22.
+  const buckets: Record<TransferGroup, PlannedTransfer[]> = {
+    system: [],
+    spl: [],
+    'token-2022': [],
+  };
+  for (const p of planned) buckets[p.group].push(p);
+
+  // 2. Chunk each bucket independently. Same-group transfers share txs
+  //    up to TRANSFERS_PER_TX; cross-group transfers never share.
   const packs: PackedTx[] = [];
-  for (let i = 0; i < planned.length; i += TRANSFERS_PER_TX) {
-    const slice = planned.slice(i, i + TRANSFERS_PER_TX);
-    packs.push({
-      ixs: [...cbIxs, ...slice.flatMap((p) => p.ixs)],
-      assets: slice.map((p) => p.asset),
-    });
+  const groupOrder: TransferGroup[] = ['system', 'spl', 'token-2022'];
+  for (const group of groupOrder) {
+    const bucket = buckets[group];
+    for (let i = 0; i < bucket.length; i += TRANSFERS_PER_TX) {
+      const slice = bucket.slice(i, i + TRANSFERS_PER_TX);
+      packs.push({
+        ixs: [...cbIxs, ...slice.flatMap((p) => p.ixs)],
+        assets: slice.map((p) => p.asset),
+      });
+    }
   }
   return packs;
 }
